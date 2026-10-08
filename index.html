@@ -1,0 +1,2638 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0d0d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>줄넘기 자세 분석기</title>
+  <style>
+    /* ── 색상 토큰: 한 곳에서 정의하고 아래에서는 이름으로만 씁니다 ── */
+    :root {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;   /* 카드/차트 바탕 */
+      --surface-2:      #262624;   /* 버튼·입력 바탕 */
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #9a9992;   /* 회색 박스(surface-2) 위에서도 4.5:1 이상 */
+      --grid:           #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255, 255, 255, 0.10);
+      --series-r:       #d95926;   /* 오른발 (주황) — 차트·범례 공통 */
+      --series-l:       #199e70;   /* 왼발 (청록)  — 차트·범례 공통 */
+      --series-speed:   #3987e5;   /* 속도 그래프 (파랑) */
+      --series-hand:    #a77bd9;   /* 손(줄) 박자 (보라) */
+      --status-critical:#d03b3b;   /* 실수 표시 (▼ 아이콘 + 글자와 함께 씀) */
+      --accent:         #2563eb;   /* 주요 버튼 */
+      --accent-hover:   #1d4ed8;
+      --ok-bg:          #1e4d2b;
+      --err-bg:         #5a1f1f;
+      --rec-bg:         #7a2330;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }   /* .btn 등의 display 설정이 hidden 속성을 덮어쓰지 않게 */
+    body {
+      margin: 0;
+      padding: 24px 16px 48px;
+      font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", sans-serif;
+      background: var(--page);
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+    .page { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    h1 { margin: 0; font-size: 22px; }
+    h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+    .head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+
+    #status { font-size: 14px; padding: 8px 14px; border-radius: 999px; background: var(--surface-2); color: var(--text-secondary); }
+    #status.ready { background: var(--ok-bg); color: var(--text-primary); }
+    #status.error { background: var(--err-bg); color: var(--text-primary); }
+    #status.rec   { background: var(--rec-bg); color: var(--text-primary); }
+
+    /* 버튼 */
+    .btn, label.upload {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface-2); color: var(--text-primary);
+      font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .btn:hover:not(:disabled) { background: #32322f; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn.primary, label.upload { background: var(--accent); border-color: transparent; }
+    .btn.primary:hover:not(:disabled), label.upload:hover { background: var(--accent-hover); }
+    input[type=file] { display: none; }
+    .btn:focus-visible, label.upload:focus-within, input[type=range]:focus-visible, summary:focus-visible, input[type=checkbox]:focus-visible {
+      outline: 2px solid #86b6ef; outline-offset: 2px;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .controls .check { font-size: 14px; color: var(--text-secondary); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+
+    /* 화면 배치: 왼쪽 영상, 오른쪽 결과/설정 */
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+    @media (max-width: 920px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+    .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .side { display: flex; flex-direction: column; gap: 16px; }
+
+    /* 영상 + 캔버스 겹치기 */
+    .stagecol { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+    #placeholder {
+      width: 100%; min-height: 320px; border: 2px dashed var(--axis); border-radius: 12px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+      color: var(--text-secondary); text-align: center; padding: 24px;
+    }
+    #placeholder strong { color: var(--text-primary); font-size: 16px; }
+    #stage { position: relative; display: none; width: fit-content; max-width: 100%; }
+    #video { display: block; max-width: 100%; max-height: 78vh; width: auto; height: auto; border-radius: 8px; background: #000; }
+    #overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+    .legend { font-size: 13px; color: var(--text-secondary); text-align: center; }
+
+    /* 실시간 결과 타일 */
+    .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .tile { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+    .tile .label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+    .tile .value { font-size: 26px; font-weight: 600; line-height: 1.2; }
+    .tile .sub { font-size: 12px; color: var(--text-muted); }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+    .dot.r { background: var(--series-r); } .dot.l { background: var(--series-l); } .dot.s { background: var(--series-speed); } .dot.h { background: var(--series-hand); }
+    .band { width: 14px; height: 10px; border-radius: 2px; display: inline-block; flex: none; background: rgba(208, 59, 59, 0.28); }
+    .tri.hollow { border-top-color: transparent; position: relative; }
+    .tri.hollow::after { content: ""; position: absolute; left: -3px; top: -8px; border-left: 3px solid transparent; border-right: 3px solid transparent; border-top: 5px solid var(--surface-2); }
+    .conf { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin-right: 4px; }
+    .conf.high { background: #5a1f1f; color: #ffd9d9; }
+    .conf.low { background: transparent; color: var(--text-secondary); border: 1px dashed var(--text-muted); }
+    .tri { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 9px solid var(--status-critical); display: inline-block; flex: none; }
+
+    /* 실수 감지 옵션 · 목록 */
+    .opt { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; cursor: pointer; }
+    .opt input { margin-top: 3px; }
+    #missMsg { font-size: 12px; color: var(--text-muted); min-height: 1.4em; margin-top: 8px; }
+    .misshead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 16px 0 8px; flex-wrap: wrap; }
+    .misshead h3 { margin: 0; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+    .btn.small { padding: 6px 12px; font-size: 12px; }
+    .btn.danger { background: #b91c1c; border-color: transparent; color: #fff; }
+    .btn.danger:hover:not(:disabled) { background: #991b1b; }
+    .sess-state { font-size: 14px; margin-bottom: 10px; color: var(--text-secondary); }
+    .sess-state b { color: var(--text-primary); }
+    .sessrow { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13px; color: var(--text-secondary); }
+    .sessrow select { background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; }
+    .sessbtns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .secdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    #secTable tfoot td { font-weight: 600; color: var(--text-primary); border-top: 1px solid var(--axis); border-bottom: none; }
+    #secTable td.dim { color: var(--text-muted); }
+    #missList { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow: auto; }
+    .missitem { display: flex; align-items: center; gap: 10px; background: var(--surface-2); border-radius: 8px; padding: 8px 12px; font-size: 13px; flex-wrap: wrap; }
+    .missitem .info { flex: 1; min-width: 160px; color: var(--text-secondary); }
+    .missitem .info b { color: var(--text-primary); font-weight: 600; }
+    .missempty { font-size: 13px; color: var(--text-muted); padding: 8px 0; }
+
+    /* 슬라이더 */
+    .slider { margin-bottom: 12px; }
+    .slider .row { display: flex; justify-content: space-between; font-size: 13px; }
+    .slider .row output { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+    .slider input[type=range] { width: 100%; accent-color: var(--series-speed); }
+    .slider .hint { font-size: 12px; color: var(--text-muted); }
+    .note { font-size: 12px; color: var(--text-muted); margin: 8px 0 0; }
+
+    .savegrid { display: flex; flex-direction: column; gap: 8px; }
+    #exportMsg { font-size: 12px; color: var(--text-muted); min-height: 1.4em; }
+
+    /* 리듬 분석 */
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 14px; }
+    .metric { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+    .metric .label { font-size: 12px; color: var(--text-secondary); }
+    .metric .value { font-size: 20px; font-weight: 600; }
+    .metric .sub { font-size: 12px; color: var(--text-muted); }
+    .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    @media (max-width: 920px) { .charts { grid-template-columns: minmax(0, 1fr); } }
+    .chartbox h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+    .chartbox .cap { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; display: flex; gap: 14px; flex-wrap: wrap; }
+    .chartbox .cap span { display: inline-flex; gap: 6px; align-items: center; color: var(--text-secondary); }
+    .chartwrap { position: relative; }
+    .chartwrap canvas { width: 100%; display: block; }
+    #laneChart { height: 120px; } #speedChart { height: 140px; } #syncChart { height: 170px; }
+    /* 경기력 분석 */
+    .perfgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+    @media (max-width: 920px) { .perfgrid { grid-template-columns: minmax(0, 1fr); } }
+    .perfgrid h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+    .tips { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+    .tips li::marker { color: var(--text-primary); font-weight: 600; }
+    #perfMiss { display: flex; flex-direction: column; gap: 8px; }
+    .pmiss { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--text-secondary); }
+    .pmiss .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--text-primary); font-weight: 600; margin-bottom: 4px; }
+    .pmiss .top .btn { margin-left: auto; }
+    .pmiss ul { margin: 4px 0 0; padding-left: 18px; }
+    .pmiss .stats { font-size: 12px; color: var(--text-muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .perf-empty { font-size: 13px; color: var(--text-muted); }
+    .tip {
+      position: absolute; pointer-events: none; display: none; z-index: 2;
+      background: #000; border: 1px solid var(--axis); border-radius: 8px; padding: 8px 12px;
+      font-size: 12px; color: var(--text-primary); white-space: nowrap;
+    }
+    /* ── 휴대폰: 손가락으로 누르기 쉬운 크기 (iOS는 16px 미만 입력칸을 누르면 화면을 확대하므로 16px) ── */
+    @media (pointer: coarse) {
+      .btn, label.upload { min-height: 44px; }
+      .btn.small { min-height: 38px; }
+      select { min-height: 40px; font-size: 16px !important; }
+      input[type=checkbox] { width: 20px; height: 20px; flex: none; }
+      input[type=range] { height: 28px; }
+    }
+    @media (max-width: 600px) {
+      body { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+      h1 { font-size: 19px; }
+      .controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .controls .btn, .controls label.upload { justify-content: center; text-align: center; }
+      .controls .check { grid-column: 1 / -1; }
+      .tile .value { font-size: 22px; }
+      .card { padding: 14px; }
+    }
+    /* ── 크게 보기: 영상+카운터를 화면 가득 (카메라 측정 때 멀리서도 보이게) ── */
+    #bigBar { display: none; }
+    body.bigview { overflow: hidden; }
+    body.bigview::before { content: ""; position: fixed; inset: 0; background: #000; z-index: 49; }
+    body.bigview #stage {
+      position: fixed; inset: 0; margin: auto; z-index: 50; display: block !important; max-width: none;
+      width: min(100vw, calc(100vh * var(--ar, 0.5625))); height: min(100vh, calc(100vw / var(--ar, 0.5625)));
+      width: min(100vw, calc(100dvh * var(--ar, 0.5625))); height: min(100dvh, calc(100vw / var(--ar, 0.5625)));
+    }
+    body.bigview #video { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+    body.bigview #bigBar {
+      display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 51; gap: 10px; justify-content: center; flex-wrap: wrap;
+      padding: 12px 16px calc(14px + env(safe-area-inset-bottom, 0px)); background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+    }
+    details { margin-top: 14px; }
+    summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+    .tablewrap { max-height: 260px; overflow: auto; margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+    th { position: sticky; top: 0; background: var(--surface-2); color: var(--text-secondary); font-weight: 600; }
+    th:first-child, td:first-child { text-align: left; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <div class="head">
+    <h1>🏃 줄넘기 자세 분석기</h1>
+    <div id="status" role="status">MediaPipe 모델 불러오는 중...</div>
+  </div>
+
+  <div class="controls">
+    <label class="upload">
+      📁 mp4 영상 선택
+      <input type="file" id="fileInput" accept="video/mp4,video/*,.mov">
+    </label>
+    <button class="btn primary" id="liveBtn" title="카메라로 줄넘기를 하는 모습을 바로 분석해서 세어 줍니다. 영상은 어디에도 업로드되지 않습니다.">📷 카메라로 실시간 측정</button>
+    <label class="check">카메라
+      <select id="camSel"><option value="user">전면 (화면을 보며)</option><option value="environment">후면 (화질 좋음)</option></select></label>
+    <label class="check">시작 전 대기
+      <select id="liveDelay"><option value="0">없음</option><option value="3">3초</option><option value="5" selected>5초</option><option value="10">10초</option></select></label>
+    <label class="check"><input type="checkbox" id="liveRescan" checked> 끝난 뒤 녹화본으로 정밀 분석</label>
+    <label class="check" title="정밀 분석에 쓸 포즈 인식 모델. full은 발끝·손목을 더 안정적으로 잡지만 분석이 2~3배 느립니다. 카메라 실시간 측정은 항상 lite.">인식 모델
+      <select id="modelSel"><option value="full">정확 (full)</option><option value="lite">빠름 (lite)</option></select></label>
+    <button class="btn" id="redoBtn" disabled>⏮ 처음부터 다시 분석</button>
+    <button class="btn" id="resetBtn" disabled>🔄 횟수 초기화</button>
+    <button class="btn" id="bigBtn" disabled title="영상과 카운터를 화면 가득 보여 줍니다">⛶ 크게 보기</button>
+    <button class="btn danger" id="markBtn" disabled title="영상을 보다가 줄에 걸린 순간에 누르세요 (키보드 M). 자동 감지된 미스도 함께 센 개수입니다.">✕ 미스 (0) · M</button>
+    <label class="check"><input type="checkbox" id="debugToggle" checked> 기준선·진단 정보 보기</label>
+  </div>
+
+  <div class="layout">
+    <!-- ───── 왼쪽: 영상 ───── -->
+    <div class="stagecol">
+      <div id="placeholder">
+        <strong>줄넘기 영상을 선택하거나 여기로 끌어다 놓으세요 · 또는 📷 카메라로 바로 측정</strong>
+        <span>mp4 / mov · 영상은 이 기기 안에서만 분석되고 어디에도 업로드되지 않습니다</span>
+      </div>
+      <div id="stage">
+        <video id="video" controls playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div class="legend">
+        🟢 왼쪽 몸 · 🟠 오른쪽 몸 · ⚪ 어깨-골반 연결선 · 🟡 공중에 떠 있는 발<br>
+        발 옆 파란 점선 = 이륙 기준이 되는 가장 낮은 지점 · 노란 점선 = 이 선을 넘어야 점프 시작 · R/L은 사람 기준 오른발/왼발
+      </div>
+    </div>
+
+    <!-- ───── 오른쪽: 결과 · 설정 · 저장 ───── -->
+    <div class="side">
+      <section class="card" aria-labelledby="h-live">
+        <h2 id="h-live">실시간 결과</h2>
+        <div class="tiles">
+          <div class="tile"><div class="label"><span class="dot r"></span>R 오른발</div><div class="value" id="tR">0</div></div>
+          <div class="tile"><div class="label"><span class="dot l"></span>L 왼발</div><div class="value" id="tL">0</div></div>
+          <div class="tile"><div class="label">합계</div><div class="value" id="tSum">0</div><div class="sub" id="tSkip">제외 0</div></div>
+          <div class="tile" style="grid-column: span 3;">
+            <div class="label"><span class="dot s"></span>스텝 속도 (최근 10초)</div>
+            <div class="value"><span id="tRate">—</span> <span style="font-size:14px;font-weight:400;color:var(--text-secondary)">스텝/초</span>
+              <span style="font-size:14px;font-weight:400;color:var(--text-secondary)"> · <span id="tRateMin">—</span> 스텝/분</span></div>
+          </div>
+          <div class="tile" style="grid-column: span 3;"><div class="label">줄 돌림 (손목·팔꿈치 박자)</div><div class="value" id="tRope" style="font-size:20px;">—</div><div class="sub" id="tRopeSub"></div></div>
+          <div class="tile"><div class="label"><i class="tri"></i>실수</div><div class="value" id="tMiss">0</div><div class="sub" id="tMissSub">자동 0 · 수동 0</div></div>
+          <div class="tile"><div class="label">현재 연속</div><div class="value" id="tCur">0</div><div class="sub">스텝</div></div>
+          <div class="tile"><div class="label">최대 연속</div><div class="value" id="tBest">0</div><div class="sub">스텝</div></div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="h-sess">
+        <h2 id="h-sess">측정 · 구간별 기록</h2>
+        <div class="sess-state" id="sessState" aria-live="polite">측정 전 — 줄을 돌리기 시작하면 자동으로 시작합니다</div>
+        <div class="sessrow"><label for="measureSel">측정 시간</label>
+          <select id="measureSel"><option value="30">30초 (스피드 스텝)</option><option value="60">60초</option><option value="20">20초</option><option value="10">10초</option><option value="0">제한 없음</option></select></div>
+        <div class="sessbtns">
+          <button class="btn small" id="startHereBtn" disabled title="지금 보고 있는 시각을 측정 시작으로 정합니다">▶ 여기서 측정 시작</button>
+          <button class="btn small danger" id="endHereBtn" disabled title="지금 보고 있는 시각에서 측정을 끝냅니다 (이후는 세지 않음)">■ 강제 종료 (여기서 끝)</button>
+          <button class="btn small" id="autoSessBtn" disabled title="직접 정한 시작·종료를 지우고 자동으로 되돌립니다">↺ 자동</button>
+        </div>
+        <div class="tablewrap" style="max-height:none"><table id="secTable"><thead><tr><th>구간</th><th>R</th><th>L</th><th>미스</th><th>스텝/초</th></tr></thead><tbody id="secBody"></tbody><tfoot id="secFoot"></tfoot></table></div>
+        <p class="note">줄을 처음 돌리기 시작한 순간부터 측정이 시작되고, 정한 시간(기본 30초)이 지나거나 "강제 종료"를 누르면 끝납니다. 끝난 뒤의 스텝은 세지 않아요. 10초 단위 구간마다 오른발·왼발·미스·속도를 보여 줍니다.</p>
+      </section>
+
+      <section class="card" aria-labelledby="h-set">
+        <h2 id="h-set">기준값 조절</h2>
+        <div id="sliders"></div>
+        <label class="opt"><input type="checkbox" id="stepInfer"> 번갈아 뛰는 동작의 R·L 보정 — 놓친 스텝 보충 + 같은 발이 한 주기에 두 번 잡힌 중복 제거</label>
+        <button class="btn" id="defaultsBtn">기본값으로 되돌리기 (실수 감지 설정 포함)</button>
+        <p class="note">바꾼 값은 지금부터의 프레임에 적용됩니다. 처음부터 다시 세려면 위의 "처음부터 다시 분석"을 누르세요. 설정은 이 브라우저에 저장됩니다.</p>
+      </section>
+
+      <section class="card" aria-labelledby="h-miss">
+        <h2 id="h-miss">실수 감지 (줄에 걸림 등)</h2>
+        <label class="opt"><input type="checkbox" id="missAuto"> 달리다 멈추면 실수로 자동 감지</label>
+        <label class="opt"><input type="checkbox" id="ropeGate"> 줄이 안 돌고 있을 때(실수 구간·연기 종료 후·준비 동작)의 스텝은 카운트에서 제외</label>
+        <label class="opt"><input type="checkbox" id="missHand"> 다리는 계속 움직여도 손·팔이 크게 튀면 실수로 자동 감지</label>
+        <label class="opt"><input type="checkbox" id="missRope"> 줄 리듬(손목 박자)이 끊겼다가 다시 이어지면 실수 근거로 사용</label>
+        <label class="opt"><input type="checkbox" id="missCountLow"> 근거가 하나뿐인 '의심' 실수도 개수에 포함</label>
+        <div id="missSliders"></div>
+        <div id="missMsg" aria-live="polite"></div>
+        <p class="note">줄은 영상에서 직접 보기 어렵기 때문에 <b>몸의 움직임이 평소와 달라지는 순간</b>을 찾습니다. ① <b>다리가 멈추면</b>(무릎·발목의 위아래 움직임이 평소의 일부로 줄어듦) ② <b>다리는 계속 움직여도 줄을 돌리는 손목이 평소보다 크게 튀면</b> ③ <b>줄을 돌리는 손목 박자가 끊겼다가 다시 이어지면</b> 실수로 표시합니다. 근거가 2개 이상 겹치면 <b>확실</b>, 1개뿐이면 <b>의심</b>으로 표시하니, 의심 실수는 "▶ 이동"으로 장면을 보고 "확인" 또는 "삭제"를 눌러 주세요. 바로 이어지는 신호(걸려서 멈춤 → 곧바로 줄을 다시 돌림)는 하나의 실수로 묶고, 따로 떨어진 신호는 별개의 실수로 셉니다. 멈춘 뒤 정해진 시간 안에 다시 달리지 않으면 연기가 끝난 것으로 보고 실수로 세지 않습니다. 준비 자세나 걷는 동안에는 감지하지 않아요. <b>줄이 안 돌고 있는 동안(실수 구간, 연기가 끝난 뒤, 준비 동작)의 스텝은 카운트에서 빼고</b>, 횟수는 실수 뒤에도 이어서 세면서 구간별 연속 스텝만 따로 보여 줍니다. 틀린 표시는 아래 "실수 목록"에서 지우고, 놓친 실수는 "지금 실수로 표시"(M)로 직접 추가하세요.</p>
+      </section>
+
+      <section class="card" aria-labelledby="h-save">
+        <h2 id="h-save">결과 저장</h2>
+        <div class="savegrid">
+          <button class="btn" id="csvBtn" disabled>📄 CSV 저장 (스텝 기록 + 요약)</button>
+          <button class="btn" id="pngBtn" disabled>🖼 현재 화면 PNG 저장</button>
+          <button class="btn primary" id="exportBtn" disabled>🎬 분석 영상 저장 (스켈레톤 + 카운터)</button>
+          <div id="exportMsg" aria-live="polite"></div>
+        </div>
+        <p class="note">분석 영상은 처음부터 실시간(1배속)으로 재생하며 녹화합니다. 영상 길이만큼 걸리고, 브라우저가 지원하면 mp4, 아니면 webm으로 저장됩니다.</p>
+      </section>
+    </div>
+  </div>
+
+  <!-- ───── 리듬 분석 ───── -->
+  <section class="card" aria-labelledby="h-rhythm">
+    <h2 id="h-rhythm">리듬 분석</h2>
+    <div class="metrics" id="metrics"></div>
+    <div class="charts">
+      <div class="chartbox">
+        <h3>좌우 스텝 타임라인</h3>
+        <div class="cap"><span><i class="dot r"></i>R 오른발</span><span><i class="dot l"></i>L 왼발</span><span><i class="tri"></i>실수 (누르면 그 장면으로 이동) · 속이 빈 ▽ = 의심</span><span>막대 하나 = 착지 1회 (연한 막대 = 놓친 스텝 보충, 속이 빈 막대 = 카운트 제외) · 회색 띠 = 줄이 안 돌던 구간 · 시작/종료선 = 측정 구간 · 흰 세로선 = 현재 위치</span></div>
+        <div class="chartwrap"><canvas id="laneChart" role="img" aria-label="좌우 스텝 타임라인"></canvas><div class="tip" id="laneTip"></div></div>
+      </div>
+      <div class="chartbox">
+        <h3>스텝 속도 (3초 평균, 스텝/초)</h3>
+        <div class="cap"><span><i class="dot s"></i>양발 합계</span><span>마우스를 올리면 값을 볼 수 있어요</span></div>
+        <div class="chartwrap"><canvas id="speedChart" role="img" aria-label="시간에 따른 스텝 속도"></canvas><div class="tip" id="speedTip"></div></div>
+      </div>
+    </div>
+    <div class="misshead">
+      <h3><i class="tri"></i><span id="missTitle">실수 목록</span></h3>
+      <button class="btn small" id="restoreBtn" hidden>지운 자동 감지 되살리기</button>
+    </div>
+    <div id="missList"></div>
+    <details id="tableDetails">
+      <summary>표로 보기 (스텝 기록)</summary>
+      <div class="tablewrap"><table><thead><tr><th>번호</th><th>발</th><th>착지 시각(초)</th><th>체공(초)</th><th>최대 높이(몸통 대비)</th><th>판정</th></tr></thead><tbody id="tableBody"></tbody></table></div>
+    </details>
+  </section>
+
+  <!-- ───── 경기력 분석 ───── -->
+  <section class="card" aria-labelledby="h-perf">
+    <h2 id="h-perf">경기력 분석 · 손과 발의 리듬</h2>
+    <div class="perf-empty" id="perfEmpty">측정 구간이 4초 이상 쌓이면 분석이 나타납니다.</div>
+    <div id="perfBody" hidden>
+      <div class="metrics" id="perfMetrics"></div>
+      <div class="chartbox">
+        <h3>손·발 박자 (스텝/초)</h3>
+        <div class="cap"><span><i class="dot s"></i>발 스텝 속도</span><span><i class="dot h"></i>손(줄) 박자 — 발 박자로 환산</span><span><i class="band"></i>손·발 박자가 어긋난 구간</span><span><i class="tri"></i>실수</span><span>두 선이 겹쳐 있으면 손과 발이 같은 박자로 맞물린 상태예요</span></div>
+        <div class="chartwrap"><canvas id="syncChart" role="img" aria-label="시간에 따른 손과 발의 박자"></canvas><div class="tip" id="syncTip"></div></div>
+      </div>
+      <div class="perfgrid">
+        <div><h3>훈련 포인트</h3><ol class="tips" id="perfTips"></ol></div>
+        <div><h3><i class="tri"></i> 실수별 원인 분석 (직전 2초 vs 평소)</h3><div id="perfMiss"></div></div>
+      </div>
+      <details id="perfSecDetails">
+        <summary>구간별 흐름 (표로 보기)</summary>
+        <div class="tablewrap"><table><thead><tr><th>구간</th><th>스텝/초 (실수 포함)</th><th>뛰는 동안 속도</th><th>박자 변동</th><th>발 높이 (평소=100)</th><th>손·발 동기</th><th>미스</th></tr></thead><tbody id="perfSecBody"></tbody></table></div>
+      </details>
+      <p class="note">'평소'는 같은 영상에서 실수와 떨어진 구간의 중앙값이에요. 사람마다 기준이 달라서 절대 기준 대신 자기 자신과 비교합니다. 손 박자는 손목이 몸통 기준으로 그리는 원운동의 주기로, 줄넘기에서는 보통 발 스텝 속도의 1/2배나 1배로 맞물립니다. 30fps 영상은 시간을 0.033초 단위로만 알 수 있어서 작은 차이(5% 미만)는 짚지 않아요. 영상 1개에서 나온 결과이므로 여러 번 측정해서 반복되는 경향을 보세요.</p>
+    </div>
+  </section>
+
+</div>
+
+<div id="bigBar">
+  <button class="btn" id="bigExit">작게 보기</button>
+  <button class="btn danger" id="bigMiss">✕ 미스</button>
+  <button class="btn danger" id="bigStop" hidden>⏹ 측정 끝내기</button>
+</div>
+
+<script type="module">
+  // ① MediaPipe 라이브러리를 인터넷(CDN)에서 가져옵니다.
+  import { PoseLandmarker, FilesetResolver }
+    from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+  const WASM_URL  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+  // 포즈 인식 모델: lite(빠름) / full(더 정확, 2~3배 느림). 영상 정밀 분석은 고른 모델을, 카메라 실시간 측정은 속도를 위해 항상 lite를 씁니다.
+  const MODEL_URLS = {
+    lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+    full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+  };
+  const MODEL_KEY = "jumpCounter.model.v1";
+  const IS_TOUCH = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;      // 휴대폰·태블릿
+  const DEFAULT_MODEL = IS_TOUCH ? "lite" : "full";     // 휴대폰은 메모리·발열 때문에 기본 lite (설정에서 full로 바꿀 수 있음)
+  let modelKind = (() => { try { const v = localStorage.getItem(MODEL_KEY); return v === "full" || v === "lite" ? v : DEFAULT_MODEL; } catch (e) { return DEFAULT_MODEL; } })();   // 컴퓨터 기본은 full (세 영상 비교에서 놓친 스텝·박자 흔들림이 적고 분석 시간은 비슷)
+
+  // ═══════════════════════════════════════════════════════════════
+  //  ★ 점프 판정 기준(Threshold) ─ 화면의 슬라이더로도 바꿀 수 있습니다 ★
+  // ═══════════════════════════════════════════════════════════════
+  const JUMP_CONFIG = {
+    // [높이 기준] "몸통 길이"(어깨~골반)에 대한 비율입니다. (카메라 거리가 달라도 같은 기준이 적용됨)
+    // 절대적인 '바닥'은 정하지 않고, 발끝의 오르내림만 봅니다.
+    //   직전에 가장 낮았던 지점에서 START만큼 올라가면 → 이륙
+    //   공중에서 가장 높았던 지점에서 DROP만큼 내려오면 → 착지
+    LIFT_START_RATIO: 0.15,   // 이만큼 올라가면 '공중'으로 판단 (↑ 올리면 더 높이 뛰어야 인정)
+    LAND_DROP_RATIO:  0.10,   // 최고점에서 이만큼 내려오면 '착지'로 판단 (너무 작으면 정점의 떨림을 착지로 오인)
+
+    // [발마다 기준 자동 조절] 카메라 각도(낮은 앵글, 한쪽 다리가 가려짐 등) 때문에 한쪽 발의 위아래 움직임이
+    // 작게 보이는 경우를 위해, 각 발의 최근 1초 움직임 폭에 비례해 위의 두 기준을 낮춥니다. (위의 두 값이 상한)
+    ADAPT_START_FRAC: 0.4,    // 이륙 기준 = 최근 1초 움직임 폭 × 0.4  (단, 아래 MIN_LIFT_RATIO ~ LIFT_START_RATIO 사이)
+    ADAPT_DROP_FRAC:  0.25,   // 착지 기준 = 최근 1초 움직임 폭 × 0.25 (단, 0.04 ~ LAND_DROP_RATIO 사이)
+    MIN_LIFT_RATIO:   0.07,   // 아무리 작게 움직여도 이 높이(몸통 대비)보다 낮게는 기준을 잡지 않음 (인식 떨림 방지)
+
+    // [체공 시간 기준] 단위: 초. 공중에 떠 있던 시간이 이 범위 안일 때만 1회로 셉니다.
+    MIN_AIRTIME_SEC: 0.06,    // 이보다 짧으면 → 인식 떨림/잡음으로 보고 제외 (30fps 영상 기준 2프레임 미만)
+    MAX_AIRTIME_SEC: 0.80,    // 이보다 길면 → 다리를 그냥 들고 있는 동작으로 보고 제외
+
+    // [그 외 세부 설정]
+    SMOOTH_ALPHA: 0.6,        // 발끝 좌표 떨림 줄이기 (1 = 보정 없음, 작을수록 부드럽지만 반응 느림)
+    FOOT_MIN_VISIBILITY: 0.3, // 발끝이 이 확률보다 낮게 보이면 그 프레임은 무시
+
+    // [실수(줄에 걸림 등) 자동 감지] 줄은 영상에서 직접 보기 어렵고 발끝은 가려지기도 해서,
+    // '스텝이 몇 개 인식됐나'가 아니라 '달리던 몸이 멈췄나'(무릎·발목의 위아래 움직임)를 봅니다.
+    MISS_AUTO: true,          // 달리다 멈추면 실수로 자동 감지할지
+    MISS_STOP_RATIO: 0.4,     // 직전 3초의 평소 움직임보다 이 비율 미만으로 줄면 '멈춤' 후보 (작을수록 확실히 멈췄을 때만 감지)
+    MISS_STOP_MIN_SEC: 0.3,   // 그 상태가 이 시간(초) 이상 이어져야 실수로 인정 (짧은 주춤은 무시)
+    MISS_RESUME_SEC: 4.0,     // 멈춘 뒤 이 시간(초) 안에 다시 달려야 '실수'. 다시 달리지 않으면 연기가 끝난 것으로 보고 실수로 세지 않음
+    // 줄에 걸려도 다리는 계속 움직일 수 있으므로, 줄을 돌리는 '손목'이 평소와 다르게 튀는지도 봅니다.
+    MISS_HAND_AUTO: true,     // 다리는 달리는 중인데 손목이 크게 튀면 실수로 자동 감지할지
+    MISS_HAND_RATIO: 3.0,     // 손목 속도가 직전 3초의 평소 손목 속도의 이 배수 이상이면 '튐' 후보
+    MISS_HAND_MIN_SEC: 0.2,   // 그 상태가 이 시간(초) 이상 이어져야 실수로 인정
+    // 줄에 걸리면 줄을 돌리던 손목의 박자가 끊겼다가 다시 시작됩니다. 이 '줄 리듬 끊김'을 실수의 또 하나의 근거로 씁니다.
+    // 근거(멈춤 · 손 튐 · 줄 리듬 끊김)가 2개 이상 겹치면 '확실', 1개뿐이면 '의심'(직접 확인 권장)으로 표시합니다.
+    MISS_ROPE_AUTO: true,     // 줄 리듬 끊김을 근거로 쓸지 (끊김만 있고 다른 근거가 없어도 '의심' 실수로 표시)
+    MISS_COUNT_LOW: true,     // '의심' 실수도 실수 개수에 넣을지 (끄면 목록에만 보이고 개수·연속 스텝 계산에서는 빠짐)
+
+    // [줄 돌림 판정] 줄을 돌리는 동안 손목·팔꿈치는 몸통 기준으로 작은 원을 빠르게(약 3~4Hz) 그립니다.
+    // 그 박자가 뚜렷할 때 '줄이 돌고 있다'고 보고, 줄이 안 돌 때의 스텝은 카운트에서 뺍니다.
+    // [측정 구간] 줄을 돌리기 시작하면 카운팅이 시작되고, 이 시간이 지나면 끝납니다. 끝난 뒤에는 세지 않고, 10초 단위로 구간 기록을 냅니다.
+    MEASURE_SEC: 30,          // 측정 시간(초). 0이면 제한 없이 끝까지. (스피드 스텝은 30초)
+    // [놓친 스텝 보충] 스피드 스텝은 오른발·왼발이 번갈아 착지합니다. 한쪽 발이 인식에서 빠져도 같은 발이 연달아 잡히면 그 사이에 스텝이 하나 있었다고 보고 보충합니다.
+    STEP_INFER: true,
+    ROPE_GATE: true,          // 줄이 안 돌고 있을 때(실수 구간·연기 종료 후·준비 동작)의 스텝을 카운트에서 제외할지
+    ROPE_ON_RATIO: 0.45,      // 손목·팔꿈치 움직임 중 줄 돌리는 박자(2.5~7Hz) 비율이 이 이상이면 '줄 돌림' (이 값 − 0.2 미만이 이어지면 '정지')
+  };
+  const DEFAULT_CONFIG = { ...JUMP_CONFIG };   // '기본값으로 되돌리기'용 사본
+
+  // ═══════════════════════════════════════════════════════════════
+  //  점프 카운터 (화면 그리기와 무관한 순수 계산 부분)
+  //  - 입력: 영상 시간(초), 발끝 Y좌표(픽셀), 몸통 길이(픽셀)
+  //  - 출력: 발마다 점프 횟수 + 착지 기록(events)
+  // ═══════════════════════════════════════════════════════════════
+  // <JumpTracker>
+  // ───── 달리다 멈춤 감지 ─────
+  // 줄에 걸리면 몸이 멈춥니다. 발끝이 가려져 스텝이 안 잡혀도 무릎·발목은 계속 움직이는 것이 보이므로,
+  // 스텝 수가 아니라 '몸이 계속 위아래로 움직이는가'를 보면 달리는 중의 오탐이 줄어듭니다.
+  //   활동량 = 무릎·발목의 세로 이동 속도 ÷ 몸통 길이 (몸통 길이/초), 0.3초 평균
+  const STOP_WIN_SEC = 0.3;     // 활동량을 평균내는 시간
+  const STOP_RUN_MIN = 0.8;     // 이 활동량 이상으로 달리던 중이어야 '달리다 멈춤'을 봄 (준비 자세·걷기에서는 감지 안 함)
+  const STOP_LEVEL_SEC = 3.0;   // '평소 움직임' = 직전 3초 활동량의 중앙값
+  const STOP_READY_SEC = 1.5;   // 최근 1.5초 동안 계속 달리고 있었어야 함 (멈춘 뒤 걸어다니는 동안 반복 감지 방지)
+  const STOP_RESUME_LEVEL = 1.5; // 멈춘 뒤 최근 1초 활동이 이 이상이면 '다시 달리기 시작'
+  const STOP_ONSET_LAG = 0.15;  // 평균을 내느라 감지가 늦는 만큼 앞당겨서 '멈추기 시작한 시각'으로 삼음
+  function createStopDetector(cfg) {
+    const stops = [];       // { t(멈추기 시작한 시각), detectT(알아챈 시각), dur(멈춘 시간), ongoing, key }
+    let buf = [], low = null, lastT = null;
+    const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    function reset() {      // 영상을 건너뛰었거나 몸이 안 보이다 돌아왔을 때 (이미 기록된 멈춤은 유지)
+      if (low && low.stop) low.stop.ongoing = false;
+      buf = []; low = null; lastT = null;
+    }
+    function resetAll() { reset(); stops.length = 0; }
+
+    function push(t, v) {   // v: 지금 시각의 활동량(몸통 길이/초)
+      if (lastT !== null && t - lastT > 0.3) reset();
+      lastT = t;
+      if (low) {
+        const exit = Math.min(0.8, cfg.MISS_STOP_RATIO * 1.5);       // 다시 움직임으로 돌아오는 기준 (들락날락 방지용으로 진입 기준보다 높게)
+        if (low.stop) low.stop.dur = t - low.t0;
+        if (v >= exit * low.level) {                                 // 다시 달리기 시작
+          if (low.stop) low.stop.ongoing = false;
+          low = null;
+        } else if (!low.stop && t - low.t0 >= cfg.MISS_STOP_MIN_SEC) {   // 충분히 오래 멈춰 있음 → 실수로 기록
+          low.stop = { t: low.t0 - STOP_ONSET_LAG, detectT: t, dur: t - low.t0, ongoing: true, resolved: false, resumed: false, key: "s" + Math.round(low.t0 * 1000) };
+          stops.push(low.stop);
+        }
+      } else if (buf.length >= 5) {
+        const level = median(buf.map(s => s.v));                    // 직전 3초의 평소 움직임
+        const recent = buf.filter(s => s.t > t - STOP_READY_SEC);
+        const ready = recent.length >= 5 && median(recent.map(s => s.v)) >= STOP_RUN_MIN;   // 방금까지 달리고 있었나
+        if (ready && level >= STOP_RUN_MIN && v < cfg.MISS_STOP_RATIO * level) low = { t0: t, level, stop: null };
+      }
+      buf.push({ t, v });
+      while (buf.length && buf[0].t < t - STOP_LEVEL_SEC) buf.shift();
+
+      // 멈춘 뒤 다시 달렸는가? → 다시 달렸으면 '실수', 일정 시간 안에 다시 달리지 않으면 '연기 종료'(실수 아님)
+      for (const s of stops) {
+        if (s.resolved) continue;
+        if (t - s.t > cfg.MISS_RESUME_SEC) { s.resolved = true; s.resumed = false; continue; }
+        const lvl = !low || low.stop !== s ? recentLevel(1.0) : null;      // 아직 멈춘 상태라면 달리는 중일 수 없음
+        if (lvl !== null && lvl >= STOP_RESUME_LEVEL) { s.resolved = true; s.resumed = true; s.resumeT = t; }
+      }
+    }
+    // 최근 sec초 동안의 다리 활동 중앙값 (표본이 부족하면 null) → '지금 달리고 있는가' 판단에 씀
+    function recentLevel(sec) {
+      const r = buf.filter(s => lastT !== null && s.t > lastT - sec);
+      return r.length >= 8 ? median(r.map(s => s.v)) : null;
+    }
+    return { push, reset, resetAll, stops, recentLevel };
+  }
+
+  // ───── 손·팔이 튀는 순간 감지 ─────
+  // 줄에 걸리면 줄을 돌리던 손이 갑자기 당겨지거나 벌어집니다. 다리는 계속 움직여도 손목은 평소와 다르게 튑니다.
+  //   손목 속도 = 두 손목의 이동 속도 ÷ 몸통 길이 (몸통 길이/초), 0.25초 중앙값
+  //   '튐' = 다리가 달리는 중인데 손목 속도가 직전 3초의 평소 값의 MISS_HAND_RATIO배 이상
+  const HAND_WIN_SEC = 0.25;     // 손목 속도를 평균내는 시간
+  const HAND_BASE_SEC = 3.0;     // '평소 손목 속도' = 직전 3초의 중앙값
+  const HAND_BASE_MIN = 0.25;    // 평소 손목 속도가 이보다 작으면(손이 거의 안 보이거나 가만히 있음) 판단하지 않음
+  const HAND_LEG_RUN = 1.5;      // 최근 1.5초 다리 활동이 이 이상이어야 '달리는 중' (걷기·준비 자세에서는 감지 안 함)
+  const HAND_ONSET_LAG = 0.1;
+  function createHandDetector(cfg) {
+    const events = [];      // { t(튀기 시작한 시각), detectT, dur, peak(평소 대비 배수), ongoing, key }
+    let buf = [], cur = null, lastT = null;
+    const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    function reset() { if (cur && cur.event) cur.event.ongoing = false; buf = []; cur = null; lastT = null; }
+    function resetAll() { reset(); events.length = 0; }
+
+    function push(t, v, legLevel) {   // v: 지금 손목 속도 / legLevel: 최근 1.5초 다리 활동 중앙값(또는 null)
+      if (lastT !== null && t - lastT > 0.3) reset();
+      lastT = t;
+      if (cur) {
+        cur.peak = Math.max(cur.peak, v / cur.base);
+        if (cur.event) { cur.event.dur = t - cur.t0; cur.event.peak = cur.peak; }
+        if (v < 0.5 * cfg.MISS_HAND_RATIO * cur.base) {            // 평소 수준으로 돌아옴
+          if (cur.event) cur.event.ongoing = false;
+          cur = null;
+        } else if (!cur.event && t - cur.t0 >= cfg.MISS_HAND_MIN_SEC) {
+          cur.event = { t: cur.t0 - HAND_ONSET_LAG, detectT: t, dur: t - cur.t0, peak: cur.peak, ongoing: true, key: "h" + Math.round(cur.t0 * 1000) };
+          events.push(cur.event);
+        }
+        return;                                                    // 튀는 동안의 값은 '평소' 기준에 넣지 않음
+      }
+      const base = buf.length >= 8 ? median(buf.map(s => s.v)) : null;
+      const running = legLevel !== null && legLevel !== undefined && legLevel >= HAND_LEG_RUN;
+      if (running && base !== null && base >= HAND_BASE_MIN && v >= cfg.MISS_HAND_RATIO * base) cur = { t0: t, base, peak: v / base, event: null };
+      else { buf.push({ t, v }); while (buf.length && buf[0].t < t - HAND_BASE_SEC) buf.shift(); }
+    }
+    return { push, reset, resetAll, events };
+  }
+
+  // ───── 줄 돌림 판정 ─────
+  // 손목·팔꿈치를 골반·어깨 기준 '상대 위치'(몸통 길이 단위)로 놓으면 달리는 몸의 위아래 튐이 빠지고 줄 돌리는 움직임만 남습니다.
+  // 0.8초 창에서 그 움직임이 2.5~7Hz 박자에 얼마나 몰려 있는지(비율)로 줄 돌림을 판정합니다.
+  //   걷거나 서 있을 때·줄에 걸렸을 때는 이 박자가 사라져서(비율 0.07~0.26) 줄 돌림(0.5~0.95)과 뚜렷하게 갈립니다.
+  const ROPE_WIN_SEC = 0.8, ROPE_STEP_SEC = 0.1, ROPE_BAND_LO = 2.5, ROPE_BAND_HI = 7;
+  const ROPE_MIN_AMP_W = 0.02, ROPE_MIN_AMP_E = 0.008;   // 이보다 작게 움직이면(가만히 있거나 떨림뿐) 줄 돌림이 아님 (몸통 길이 단위)
+  const ROPE_LEG_MIN = 1.2;       // 창 안 다리 활동(몸통 길이/초)의 중앙값이 이 이상이어야 함 — 줄을 돌리려면 다리도 뛰고 있어야 함 (걷기는 0.2~1.2, 달리기는 2~4)
+  const ROPE_BODY_FRAC = 0.8;     // 창 안에서 양발·양발목이 이 비율 이상 보여야 판정 (몸 전체가 안 보이면 랜드마크를 믿을 수 없음)
+  const ROPE_MIN_ON_SEC = 0.6;    // 이보다 짧게 켜졌다 꺼지는 것은 무시
+  const ROPE_MAX_GAP = 0.12;      // 창 안에서 프레임 간격이 이보다 벌어지면(영상 끊김·프레임 누락) 판단을 보류하고 이전 상태를 유지
+  const ROPE_OFF_DELTA = 0.2;     // '정지'로 바뀌는 기준 = ROPE_ON_RATIO − 이 값. 켜짐보다 훨씬 낮게 잡아서, 애매한 구간에서 정상 줄넘기를 '정지'로 오판하지 않게 함
+  const ROPE_OFF_STEPS = 3;       // '줄 돌림 → 정지'는 기준 미만이 이만큼(0.1초 × 3) 연속될 때만 전환 (비율이 잠깐 출렁이는 것 무시)
+  const ROPE_JUMP_DIST = 0.4;     // 골반이 한 프레임 사이에 몸통 길이의 0.4배 넘게 순간이동하면 다른 사람으로 추적이 바뀐 것으로 봄 (실제 사례 0.45~0.79, 달리기는 최대 0.1).
+                                  // 속도(거리÷시간)가 아니라 '거리'로 보는 이유: 속도는 프레임이 빠를수록 인식 떨림이 크게 증폭돼서 영상마다 기준이 달라짐
+  const ROPE_SIZE_JUMP = 1.5;     // 몸통 길이가 프레임 사이에 1.5배(또는 1/1.5) 넘게 바뀌어도 마찬가지
+  function createRopeDetector(cfg) {
+    let samples = [], timeline = [], state = false, nextCenter = null, pendingLow = [];
+    let cacheN = -1, cacheIv = [], known = 0;     // known: 손목·팔꿈치로 실제 판정한 횟수 (0이면 판정 정보가 없는 것)
+    function reset() { samples = []; state = false; nextCenter = null; pendingLow = []; }   // 영상을 건너뛰었을 때 (이미 판정한 구간은 유지)
+    function resetAll() { reset(); timeline = []; cacheN = -1; cacheIv = []; known = 0; }
+
+    // 비균등 시각 DFT: 0.75~8Hz 전체 파워 중 2.5~7Hz 대역의 비율(ratio)과 그 대역의 진폭(rms, 몸통 길이 단위)
+    function bandStats(win, key) {
+      const pts = win.filter(s => s[key]);
+      if (pts.length < win.length * 0.8 || pts.length < 6) return null;
+      const t0 = pts[0].t; let band = 0, total = 0;
+      for (let c = 0; c < 2; c++) {
+        const m = pts.reduce((a, s) => a + s[key][c], 0) / pts.length;
+        for (let f = 0.75; f <= 8.001; f += 0.25) {
+          let re = 0, im = 0;
+          for (const s of pts) { const a = 2 * Math.PI * f * (s.t - t0), v = s[key][c] - m; re += v * Math.cos(a); im += v * Math.sin(a); }
+          const p = re * re + im * im; total += p;
+          if (f >= ROPE_BAND_LO && f <= ROPE_BAND_HI) band += p;
+        }
+      }
+      return total > 0 ? { ratio: band / total, rms: Math.sqrt(2 * band) / pts.length } : null;
+    }
+
+    function evaluate(center) {
+      const half = ROPE_WIN_SEC / 2;
+      const win = samples.filter(s => s.t >= center - half && s.t <= center + half);
+      const dts = []; for (let i = Math.max(1, samples.length - 16); i < samples.length; i++) dts.push(samples[i].t - samples[i - 1].t);
+      dts.sort((a, b) => a - b);
+      const expected = dts.length ? ROPE_WIN_SEC / Math.max(0.005, dts[Math.floor(dts.length / 2)]) : 0;
+      const gapOk = (() => {                      // 창의 양 끝과 표본 사이의 간격까지 포함해서 가장 큰 공백을 검사
+        if (!win.length) return false;
+        let prev = center - half, mx = 0;
+        for (const s of win) { mx = Math.max(mx, s.t - prev); prev = s.t; }
+        return Math.max(mx, center + half - prev) <= ROPE_MAX_GAP;
+      })();
+      if (win.length < Math.max(8, expected * 0.6) || !gapOk) { timeline.push({ t: center, r: null, on: state, why: win.length < Math.max(8, expected * 0.6) ? "few" : "gap" }); return; }   // 프레임이 빠졌거나 끊김 → 판단 보류
+      let why = win.some(s => s.brk) ? "brk" : win.filter(s => s.body).length < win.length * ROPE_BODY_FRAC ? "body" : "";
+      let forced = why !== "";   // 추적 대상이 바뀜 / 몸이 안 보임 → 강제로 '정지'
+      const legs = win.map(s => s.leg).filter(v => v !== null && v !== undefined).sort((a, b) => a - b);
+      if (legs.length >= win.length * 0.6 && legs[Math.floor(legs.length / 2)] < ROPE_LEG_MIN) { forced = true; why = "leg"; }   // 다리가 안 뛰고 있음(걷기·서 있기) → '정지'
+      let r = null;
+      if (!forced) {
+        const w = bandStats(win, "w"), e = bandStats(win, "e"), parts = [];
+        if (w) parts.push(w.rms >= ROPE_MIN_AMP_W ? w.ratio : 0);
+        if (e) parts.push(e.rms >= ROPE_MIN_AMP_E ? e.ratio : 0);
+        if (parts.length) r = parts.reduce((a, b) => a + b, 0) / parts.length;
+      }
+      if (forced) { state = false; pendingLow = []; }
+      else if (r !== null) {
+        if (!state && r >= cfg.ROPE_ON_RATIO) state = true;                      // 켜짐/꺼짐 기준을 다르게 해서 들락날락 방지
+      }
+      if (forced || r !== null) known++;
+      const entry = { t: center, r, on: state, why: forced ? why : (r === null ? "unk" : "") };
+      timeline.push(entry);
+      if (!forced && r !== null && state) {                                      // 줄 돌림 중 기준 미만이 연속되면 '정지'로 전환 (전환 시 그 시작 시점으로 되돌려 반영)
+        if (r < cfg.ROPE_ON_RATIO - ROPE_OFF_DELTA) {
+          pendingLow.push(entry);
+          if (pendingLow.length >= ROPE_OFF_STEPS) { for (const e of pendingLow) e.on = false; state = false; pendingLow = []; }
+        } else pendingLow = [];
+      }
+    }
+
+    // s: { w: [x, y] | null (손목, 몸통 길이 단위), e: 팔꿈치, body: 양발이 보이는지, brk: 추적 대상이 바뀌었는지, leg: 다리 활동 또는 null }
+    function push(t, s) {
+      samples.push({ t, ...s });
+      while (samples.length && samples[0].t < t - 3) samples.shift();
+      if (nextCenter === null) nextCenter = samples[0].t + ROPE_WIN_SEC / 2;
+      while (nextCenter + ROPE_WIN_SEC / 2 <= t) { evaluate(nextCenter); nextCenter += ROPE_STEP_SEC; }
+    }
+
+    // 줄이 돌고 있던 구간들 (0.6초 미만은 무시, 지금도 돌고 있는 마지막 구간은 끝이 Infinity)
+    function intervals() {
+      if (cacheN === timeline.length) return cacheIv;
+      const runs = []; let run = null;
+      for (const e of timeline) {
+        if (e.on) { if (!run) { run = { a: e.t, b: e.t, open: false }; runs.push(run); } run.b = e.t; } else run = null;
+      }
+      if (run) run.open = true;
+      cacheIv = runs.filter(r => r.b - r.a + ROPE_STEP_SEC >= ROPE_MIN_ON_SEC).map(r => ({ a: r.a - 0.15, b: r.open ? Infinity : r.b + 0.05 }));
+      cacheN = timeline.length;
+      return cacheIv;
+    }
+    function isOn(t) {      // true 줄 돌림 / false 정지 / null 판정 정보 없음(손목·팔꿈치가 한 번도 안 보임 → 카운트에서 제외하지 않음)
+      if (!timeline.length || known === 0) return null;
+      for (const r of intervals()) if (t >= r.a && t <= r.b) return true;
+      return false;
+    }
+    const latest = () => timeline.length ? timeline[timeline.length - 1] : null;
+    const span = () => timeline.length ? [timeline[0].t, timeline[timeline.length - 1].t] : null;
+    // a~b 사이에 '정지'로 판정된 시점 중 추적 문제(몸이 안 보임·대상 바뀜·프레임 끊김) 때문인 비율 (0~1, 판정 기록이 없으면 null)
+    function trackIssue(a, b) {
+      let n = 0, bad = 0;
+      for (const e of timeline) if (e.t > a && e.t < b && !e.on) { n++; if (e.why === "body" || e.why === "brk" || e.why === "gap" || e.why === "few") bad++; }
+      return n ? bad / n : null;
+    }
+    return { push, reset, resetAll, intervals, isOn, latest, span, trackIssue };
+  }
+
+  function createJumpTracker(cfg) {
+    const makeFoot = () => ({
+      count: 0,        // 인정된 점프 횟수
+      skipped: 0,      // 기준 미달로 제외된 횟수 (튜닝할 때 참고)
+      airborne: false, // 지금 공중에 있는지
+      startT: 0,       // 이륙한 시각
+      smoothY: null,   // 보정된 발끝 Y (픽셀, 아래로 갈수록 커짐)
+      groundY: null,   // 직전에 발끝이 가장 낮았던 지점 = 이륙 높이의 기준 (픽셀)
+      peakY: null,     // 공중에서 가장 높이 올라간 지점 (픽셀)
+      lift: 0,         // groundY보다 몸통 길이의 몇 배만큼 위에 있는지
+      hist: [],        // 최근 1초의 보정된 발끝 Y 기록 → 이 발의 움직임 폭 계산용
+    });
+    const feet = { R: makeFoot(), L: makeFoot() };
+    const events = [];    // 인정된 점프 기록: { foot, t(착지 시각), airtime(체공 시간), peak(최대 높이) }
+    const marks = { manual: [], dismissed: new Set(), confirmed: new Set(), start: null, end: null };   // 사용자가 직접 표시한 실수 시각 / 지운 자동 감지(키) / 직접 정한 측정 시작·종료 시각. 초기화 때 같이 지워짐
+    const stopDet = createStopDetector(cfg);
+    const stops = stopDet.stops;   // 자동 감지된 '달리다 멈춤' 기록
+    const handDet = createHandDetector(cfg);
+    const handEvents = handDet.events;   // 자동 감지된 '손·팔이 튐' 기록
+    const rope = createRopeDetector(cfg);
+    const armTrack = [];                    // 손목의 몸통 기준 상대 위치 기록 { t, w: [x, y] (몸통 길이 단위) } → 손·발 리듬 분석용
+    let prevHip = null;                     // 추적 대상이 바뀌었는지 보기 위한 직전 골반 위치·몸통 길이
+    let prevHand = null, handSpeeds = [];   // 손목 속도 계산용
+    let prevMotion = null, speeds = [], curLeg = null;   // curLeg: 가장 최근 다리 활동(0.3초 평균)   // 활동량 계산용: 직전 프레임의 무릎·발목 위치 / 최근 0.3초의 순간 속도
+    let scale = null;     // 몸통 길이 (픽셀)
+    let analyzedUntil = -1;   // 여기까지(영상 시간, 초)는 이미 분석함 → 되감아서 다시 볼 때 중복으로 세지 않기 위함
+    let replaying = false;    // 지금 이미 분석한 구간을 다시 보는 중인지
+
+    // 추적 상태만 지움 (횟수는 유지) — 영상을 앞/뒤로 건너뛰었을 때
+    function resetTracking() {
+      for (const f of Object.values(feet)) {
+        f.airborne = false; f.smoothY = null; f.groundY = null; f.peakY = null; f.lift = 0; f.hist = [];
+      }
+      prevMotion = null; speeds = []; curLeg = null; stopDet.reset();
+      prevHand = null; handSpeeds = []; handDet.reset();
+      rope.reset(); prevHip = null;
+    }
+    // 횟수까지 전부 지움 — 새 영상, '처음부터 다시 분석', '횟수 초기화' 때만 (되감기만으로는 지우지 않음)
+    function resetAll() {
+      resetTracking();
+      scale = null;
+      analyzedUntil = -1; replaying = false;
+      events.length = 0; stopDet.resetAll(); handDet.resetAll(); rope.resetAll(); armTrack.length = 0;
+      marks.manual.length = 0; marks.dismissed.clear(); marks.confirmed.clear(); marks.start = null; marks.end = null;
+      for (const f of Object.values(feet)) { f.count = 0; f.skipped = 0; }
+    }
+
+    // t: 영상 시간(초) / input.footY: {R, L} 발끝 Y픽셀(안 보이면 null) / input.torsoPx: 몸통 길이 또는 null
+    function update(t, input) {
+      // 이미 분석한 구간(되감아서 다시 보는 중)은 세지 않고 기록을 그대로 둔다
+      if (t <= analyzedUntil) { replaying = true; return; }
+      if (replaying) { resetTracking(); replaying = false; }   // 새 구간으로 넘어오면 발 추적만 새로 시작
+      analyzedUntil = t;
+
+      // 몸통 길이는 부드럽게 평균내서 사용
+      if (input.torsoPx) {
+        scale = scale === null ? input.torsoPx : scale * 0.9 + input.torsoPx * 0.1;
+      }
+      if (scale === null) return;
+
+      // 몸 전체의 활동량: 무릎·발목의 세로 이동 속도 ÷ 몸통 길이 → 0.3초 평균을 멈춤 감지기에 전달
+      const mo = input.motionY;   // { kR, kL, aR, aL }: 무릎·발목 Y픽셀 (안 보이면 null)
+      if (mo) {
+        if (prevMotion && t - prevMotion.t > 0 && t - prevMotion.t <= 0.2) {
+          const dt = t - prevMotion.t;
+          let sum = 0, n = 0;
+          for (const k of ["kR", "kL", "aR", "aL"]) {
+            const a = prevMotion.y[k], b = mo[k];
+            if (a !== null && a !== undefined && b !== null && b !== undefined) { sum += Math.abs(b - a) / dt / scale; n++; }
+          }
+          if (n) {
+            speeds.push({ t, v: sum / n });
+            while (speeds[0].t < t - STOP_WIN_SEC) speeds.shift();
+            if (speeds.length >= 3) { curLeg = speeds.reduce((s, x) => s + x.v, 0) / speeds.length; stopDet.push(t, curLeg); }
+          } else { speeds = []; curLeg = null; }
+        } else { speeds = []; curLeg = null; }
+        prevMotion = { t, y: mo };
+      } else { prevMotion = null; speeds = []; curLeg = null; }
+
+      // 줄 돌림 판정용 표본: 손목·팔꿈치의 몸통 기준 상대 위치 + 몸 전체가 보이는지 + 추적 대상이 바뀌었는지
+      let brk = false;
+      const hip = input.hipXY, rawT = input.torsoPx;
+      if (hip && rawT && prevHip && t - prevHip.t > 0 && t - prevHip.t <= 0.25) {
+        const ratio = rawT / prevHip.torso;
+        const dist = Math.hypot(hip[0] - prevHip.p[0], hip[1] - prevHip.p[1]) / prevHip.torso;
+        if (dist > ROPE_JUMP_DIST || ratio > ROPE_SIZE_JUMP || ratio < 1 / ROPE_SIZE_JUMP) brk = true;
+      }
+      prevHip = hip && rawT ? { t, p: hip, torso: rawT } : null;
+      const ar = input.armRel, norm = (p) => p ? [p[0] / scale, p[1] / scale] : null;
+      rope.push(t, { w: ar ? norm(ar.w) : null, e: ar ? norm(ar.e) : null, body: !!input.bodyOk, brk, leg: curLeg });
+      if (ar && ar.w && !brk) armTrack.push({ t, w: norm(ar.w) });
+
+      // 손목 속도: 두 손목의 이동 속도 ÷ 몸통 길이 → 0.25초 중앙값을 손 튐 감지기에 전달
+      const hd = input.handXY;   // { R: [x, y] | null, L: [x, y] | null } 손목 픽셀 위치
+      if (hd) {
+        if (prevHand && t - prevHand.t > 0 && t - prevHand.t <= 0.2) {
+          const dt = t - prevHand.t;
+          let sum = 0, n = 0;
+          for (const k of ["R", "L"]) {
+            const a = prevHand.p[k], b = hd[k];
+            if (a && b) { sum += Math.hypot(b[0] - a[0], b[1] - a[1]) / dt / scale; n++; }
+          }
+          if (n) {
+            handSpeeds.push({ t, v: sum / n });
+            while (handSpeeds[0].t < t - HAND_WIN_SEC) handSpeeds.shift();
+            if (handSpeeds.length >= 3) {   // 평균이 아니라 중앙값: 한두 프레임짜리 손목 인식 오류(순간 튐)에 흔들리지 않게
+              const sv = handSpeeds.map(x => x.v).sort((a, b) => a - b);
+              handDet.push(t, sv[Math.floor(sv.length / 2)], stopDet.recentLevel(1.5));
+            }
+          } else handSpeeds = [];
+        } else handSpeeds = [];
+        prevHand = { t, p: hd };
+      } else { prevHand = null; handSpeeds = []; }
+
+      for (const key of ["R", "L"]) {
+        const f = feet[key];
+        const y = input.footY[key];
+        if (y === null || y === undefined) {   // 발이 안 보임 → 이 발의 점프 추적은 중단
+          f.smoothY = null; f.groundY = null; f.airborne = false; f.lift = 0; f.hist = [];
+          continue;
+        }
+
+        // 발끝 위치 보정(떨림 완화)
+        f.smoothY = f.smoothY === null ? y : cfg.SMOOTH_ALPHA * y + (1 - cfg.SMOOTH_ALPHA) * f.smoothY;
+        const sy = f.smoothY;
+        if (f.groundY === null) f.groundY = sy;
+
+        // 이 발의 최근 1초 움직임 폭에 맞춰 이륙/착지 기준을 낮춤 (상한 = 사용자 설정값)
+        f.hist.push({ t, y: sy });
+        while (f.hist[0].t < t - 1.0) f.hist.shift();
+        let hi = -Infinity, lo = Infinity;
+        for (const p of f.hist) { if (p.y > hi) hi = p.y; if (p.y < lo) lo = p.y; }
+        const amp = (hi - lo) / scale;
+        const startEff = Math.min(cfg.LIFT_START_RATIO, Math.max(cfg.MIN_LIFT_RATIO, cfg.ADAPT_START_FRAC * amp));
+        const dropEff = Math.min(cfg.LAND_DROP_RATIO, Math.max(0.04, cfg.ADAPT_DROP_FRAC * amp));
+        f.startEff = startEff;
+
+        // 절대적인 '바닥'을 정하지 않고, 발끝의 오르내림만 본다 (Y는 클수록 아래)
+        //   지상: 가장 낮았던 지점(groundY)을 계속 갱신 → 거기서 START만큼 올라가면 이륙
+        //   공중: 가장 높았던 지점(peakY)을 계속 갱신 → 거기서 DROP만큼 내려오면 착지
+        // 그래서 서 있는 위치/자세가 달라져 바닥 높이가 변해도 영향이 없음
+        if (!f.airborne) {
+          f.groundY = Math.max(f.groundY, sy);
+          f.lift = (f.groundY - sy) / scale;
+          if (f.lift >= startEff) {                       // 이륙
+            f.airborne = true; f.startT = t; f.peakY = sy;
+          }
+        } else {
+          f.peakY = Math.min(f.peakY, sy);
+          f.lift = (f.groundY - sy) / scale;
+          if ((sy - f.peakY) / scale >= dropEff) {        // 착지
+            const airtime = t - f.startT;
+            if (airtime >= cfg.MIN_AIRTIME_SEC && airtime <= cfg.MAX_AIRTIME_SEC) {
+              f.count++;
+              events.push({ foot: key, t, airtime, peak: (f.groundY - f.peakY) / scale });
+            } else {
+              f.skipped++;
+            }
+            f.airborne = false; f.groundY = sy;
+          } else if (t - f.startT > cfg.MAX_AIRTIME_SEC) {
+            // 너무 오래 떠 있음 → 점프가 아니라 발을 든 자세로 보고 제외, 지금 위치를 새 기준으로 삼음
+            f.skipped++;
+            f.airborne = false; f.groundY = sy;
+          }
+        }
+      }
+    }
+
+    return { update, resetAll, resetTracking, feet, events, stops, handEvents, marks, armTrack,
+             ropeOnAt: (t) => rope.isOn(t), ropeIntervals: () => rope.intervals(), ropeLatest: () => rope.latest(), ropeSpan: () => rope.span(), ropeKnown: () => rope.isOn(0) !== null,
+             ropeTrackIssue: (a, b) => rope.trackIssue(a, b),
+             getState: () => ({ scale, replaying, analyzedUntil }) };
+  }
+  // </JumpTracker>
+
+  // ═══════════════════════════════════════════════════════════════
+  //  분석 계산 (속도 · 리듬 · CSV) — 이것도 화면과 무관한 순수 계산
+  // ═══════════════════════════════════════════════════════════════
+  // <Analysis>
+  const PAUSE_GAP_SEC = 1.0;   // 스텝 사이가 이보다 길면 '쉬는 구간'으로 보고 리듬 계산에서 제외
+
+  // now 시점 기준 최근 windowSec초 동안의 스텝 수 ÷ 초 (영상 시작 1초 전에는 null)
+  function stepRate(events, now, windowSec) {
+    if (now < 1) return null;
+    const from = now - windowSec;
+    let n = 0;
+    for (const e of events) if (e.t > from && e.t <= now) n++;
+    return n / Math.min(windowSec, now);
+  }
+
+  // 시간에 따른 속도 그래프용 데이터: stepS초마다 최근 win초 평균 속도
+  function speedSeries(events, endT, win, stepS) {
+    const pts = [];
+    for (let t = 1; t <= endT + 1e-9; t += stepS) pts.push({ t, v: stepRate(events, t, win) });
+    return pts;
+  }
+
+  const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  const sd = (a) => { const m = mean(a); return Math.sqrt(mean(a.map(x => (x - m) ** 2))); };
+
+  // 좌우 리듬 분석 (events는 시간순)
+  function analyzeRhythm(events) {
+    const out = { n: events.length, alternation: null, cycleMean: null, cycleSd: null, score: null,
+                  rl: null, lr: null, balance: null, first: null, last: null, avgRate: null, maxRate: null };
+    if (events.length < 3) return out;
+
+    // 1) 교차 비율: 바로 다음 스텝이 반대 발인 비율, 그리고 R→L / L→R 간격
+    let pairs = 0, alt = 0; const rl = [], lr = [];
+    for (let i = 1; i < events.length; i++) {
+      const dt = events[i].t - events[i - 1].t;
+      if (dt > PAUSE_GAP_SEC) continue;
+      pairs++;
+      if (events[i].foot !== events[i - 1].foot) {
+        alt++;
+        (events[i - 1].foot === "R" ? rl : lr).push(dt);
+      }
+    }
+    if (pairs > 0) out.alternation = alt / pairs;
+    if (rl.length) out.rl = mean(rl);
+    if (lr.length) out.lr = mean(lr);
+    if (rl.length && lr.length) out.balance = Math.min(out.rl, out.lr) / Math.max(out.rl, out.lr);
+
+    // 2) 리듬 일정도: 같은 발이 다시 착지하기까지의 주기가 얼마나 고른지 (100 − 변동계수%)
+    //    (두 스텝 사이 간격보다 주기가 길어서 프레임 단위 시간 오차의 영향이 작음)
+    const cycles = [];
+    for (const foot of ["R", "L"]) {
+      const ts = events.filter(e => e.foot === foot).map(e => e.t);
+      for (let i = 1; i < ts.length; i++) if (ts[i] - ts[i - 1] <= PAUSE_GAP_SEC * 2) cycles.push(ts[i] - ts[i - 1]);
+    }
+    if (cycles.length >= 3) {
+      out.cycleMean = mean(cycles);
+      out.cycleSd = sd(cycles);
+      out.score = Math.max(0, Math.min(100, 100 - (out.cycleSd / out.cycleMean) * 100));
+    }
+
+    // 3) 전체 평균 속도 / 최고 속도
+    out.first = events[0].t;
+    out.last = events[events.length - 1].t;
+    if (out.last - out.first > 0) out.avgRate = (events.length - 1) / (out.last - out.first);
+    const series = speedSeries(events, out.last, 3, 0.25);
+    if (series.length) out.maxRate = Math.max(...series.map(p => p.v));
+    return out;
+  }
+
+  // ───── 실수(줄에 걸림 등) ─────
+  // 자동 감지는 카운터가 만든 '달리다 멈춤'(tracker.stops)을 쓰고, 여기서는 사용자의 수동 표시와 합칩니다.
+  // 실수 시각(t) = 멈추기 시작한 시각 (이 시각 이후의 스텝부터 새 연속 구간)
+  // detectT = 실수라고 알아챌 수 있게 된 시각 (화면 경고 표시용)
+  const MISS_WINDOW_PAD = 0.1;      // 실수 구간(걸린 순간 ~ 다시 줄을 돌리기까지) 끝에 붙이는 여유 시간
+  const MISS_MERGE_SEC = 0.25;      // 멈춤·손 튐 사이가 이 시간 이하로 바로 이어지면 하나의 실수로 묶음 (예: 걸려서 멈춤 → 곧바로 줄을 다시 돌림). 이보다 떨어져 있으면 별개의 실수
+
+  // ───── 줄 리듬 끊김: 줄 돌림 구간 사이의 빈틈 (줄이 멈췄다가 다시 돈 구간) ─────
+  // 추적 문제(몸이 안 보임·대상 바뀜·프레임 끊김)로 생긴 빈틈, 너무 짧은 빈틈, 다시 돌기까지 너무 오래 걸린 빈틈(휴식·연기 종료)은 빼고,
+  // 바로 전에 줄을 충분히 돌리고 있었던 경우만 씁니다.
+  const ROPE_GAP_MIN = 0.3, ROPE_GAP_PRE = 1.5;
+  const ROPE_LINK_PRE = 0.8, ROPE_LINK_POST = 0.3;   // 멈춤·손 튐이 빈틈 시작 0.8초 전 ~ 빈틈 끝 0.3초 후 사이에 있으면 같은 실수의 근거로 봄 (줄 판정은 0.8초 창이라 늦게 꺼짐)
+  function ropeGaps(ivs, trackIssue, cfg) {
+    const gaps = [];
+    for (let i = 1; i < ivs.length; i++) {
+      const prev = ivs[i - 1], a = prev.b, b = ivs[i].a;
+      if (b - a < ROPE_GAP_MIN || b - a > cfg.MISS_RESUME_SEC) continue;
+      if (prev.b - prev.a < ROPE_GAP_PRE) continue;
+      const bad = trackIssue ? trackIssue(a, b) : null;
+      if (bad !== null && bad > 0.5) continue;
+      gaps.push({ a, b });
+    }
+    return gaps;
+  }
+
+  // stops: 달리다 멈춤 기록 / hands: 손·팔 튐 기록 / marks: 사용자의 수동 표시와 지운 자동 감지(key 목록)·확인한 의심 실수 / gaps: 줄 리듬 끊김
+  // 결과의 evidence: 근거 목록("stop" 멈춤, "hand" 손 튐, "rope" 줄 리듬 끊김), conf: "high" 확실(근거 2개 이상 또는 직접 확인) / "low" 의심
+  function computeMisses(stops, hands, cfg, duration, marks, gaps = []) {
+    const hasDur = duration !== null && duration !== undefined;
+    const ev = [];
+    if (cfg.MISS_AUTO) for (const s of stops) {
+      if (!s.resumed) continue;      // 멈춘 뒤 다시 달리지 않은 것(연기 종료 등)은 실수가 아님. 아직 판단 중인 것도 숨김
+      ev.push({ kind: "stop", t0: s.t, t1: s.t + s.dur, detectT: s.resumeT !== undefined ? s.resumeT : s.detectT, dur: s.dur, ongoing: false, key: s.key });
+    }
+    if (cfg.MISS_HAND_AUTO) for (const e of hands) {
+      if (hasDur && e.t > duration - 1.0) continue;                // 영상 끝 1초 안(자리를 뜨는 동작 등)은 무시
+      ev.push({ kind: "hand", t0: e.t, t1: e.t + e.dur, detectT: e.detectT, dur: e.dur, peak: e.peak, ongoing: e.ongoing, key: e.key });
+    }
+    ev.sort((a, b) => a.t0 - b.t0);
+    const clusters = [];
+    for (const e of ev) {
+      const c = clusters[clusters.length - 1];
+      if (c && e.t0 - c.t1 <= MISS_MERGE_SEC) { c.events.push(e); c.t1 = Math.max(c.t1, e.t1); c.detectT = Math.min(c.detectT, e.detectT); }
+      else clusters.push({ events: [e], t0: e.t0, t1: e.t1, detectT: e.detectT });
+    }
+    const useGaps = cfg.MISS_ROPE_AUTO ? gaps : [], linked = new Set();
+    const confirmed = marks.confirmed || new Set();
+    const auto = clusters.map(c => {
+      const stop = c.events.find(e => e.kind === "stop"), hand = c.events.find(e => e.kind === "hand");
+      const gap = useGaps.find(g => c.t0 >= g.a - ROPE_LINK_PRE && c.t0 <= g.b + ROPE_LINK_POST);
+      if (gap) linked.add(gap);
+      const evidence = [...(stop ? ["stop"] : []), ...(hand ? ["hand"] : []), ...(gap ? ["rope"] : [])];
+      const key = c.events[0].key;
+      return { t: c.t0, t1: c.t1 + MISS_WINDOW_PAD, detectT: c.detectT, kind: stop && hand ? "both" : stop ? "stop" : "hand", auto: true,
+               dur: stop ? stop.dur : null, handPeak: hand ? hand.peak : null, ongoing: c.events.some(e => e.ongoing),
+               evidence, conf: evidence.length >= 2 || confirmed.has(key) ? "high" : "low", resumeT: gap ? gap.b : (stop && stop.t1 ? stop.t1 : null),
+               keys: c.events.map(e => e.key), key };
+    });
+    for (const g of useGaps) {                                        // 멈춤·손 튐 없이 줄 리듬만 끊긴 경우 → '의심' 실수
+      if (linked.has(g)) continue;
+      const key = "r" + Math.round(g.a * 1000);
+      auto.push({ t: g.a, t1: g.b + MISS_WINDOW_PAD, detectT: g.b, kind: "rope", auto: true, dur: g.b - g.a, handPeak: null, ongoing: false,
+                  evidence: ["rope"], conf: confirmed.has(key) ? "high" : "low", resumeT: g.b, keys: [key], key });
+    }
+    const kept = auto.filter(m => !m.keys.every(k => marks.dismissed.has(k)));       // 지운 실수 (묶인 모든 근거를 지웠을 때만 숨김)
+    const manual = marks.manual.map(t => ({ t, detectT: t, kind: "manual", auto: false, evidence: ["manual"], conf: "high", key: "m" + Math.round(t * 1000), keys: ["m" + Math.round(t * 1000)] }));
+    return [...kept, ...manual].sort((a, b) => a.t - b.t);
+  }
+
+  // ───── 스텝 판정: 카운트할 스텝인가? ─────
+  // 각 스텝에 status를 붙입니다.
+  //   "ok"     카운트 (줄이 돌고 있었고 실수 구간이 아님)
+  //   "miss"   실수 구간(줄에 걸린 순간 ~ 다시 줄을 돌리기까지)의 스텝 → 카운트 제외
+  //   "norope" 줄이 안 돌고 있던 때의 스텝(준비 동작, 걸려서 줄이 안 도는 동안, 연기가 끝난 뒤 걷기 등) → 카운트 제외
+  //   "out"    측정 구간(줄을 돌리기 시작한 때 ~ 측정 시간이 끝나거나 강제 종료한 때) 밖의 스텝 → 카운트 제외
+  //   "dup"    같은 발이 한 주기 안에 두 번 잡힌 중복 감지(buildView에서 표시) → 카운트 제외
+  // ropeOnAt(t): true 줄 돌림 / false 정지 / null 판정 기록 없음(손목 정보가 없으면 제외하지 않음)
+  function classifyEvents(events, ropeOnAt, misses, cfg, session) {
+    const wins = misses.filter(m => m.auto && m.t1 !== undefined).map(m => [m.t, m.t1]);
+    return events.map(e => {
+      let status = "ok";
+      if (session && session.start !== null && (e.t < session.start || (session.end !== null && e.t > session.end))) status = "out";   // 측정 구간 밖
+      else if (cfg.ROPE_GATE) {
+        if (wins.some(([a, b]) => e.t >= a && e.t <= b)) status = "miss";
+        else if (ropeOnAt && ropeOnAt(e.t) === false) status = "norope";
+      }
+      return { ...e, status };
+    });
+  }
+
+  // ───── 번갈아 뛰는 패턴으로 R·L 보정: 놓친 스텝 보충 + 중복 감지 제거 ─────
+  // 스피드 스텝은 오른발·왼발이 번갈아 착지합니다. 그래서
+  //   ① 같은 발이 연달아 잡혔는데 그 사이에 반대 발이 없고 간격이 한 주기 정도면 → 인식에서 빠진 스텝이 하나 있었다고 보고 보충하고
+  //   ② 같은 발이 주기의 0.6배보다 가깝게 연달아 잡히면 → 한 번 착지가 두 번 잡힌 것(중복)으로 보고 뒤의 것을 뺍니다.
+  // 둘 다 먼저 스텝 모델을 구합니다: C = 같은 발 '정상 주기'(사이에 반대 발이 있는 경우)의 중앙값, P = 반대 발이 주기의 어느 지점에 착지하는지(위상)의 중앙값.
+  // 번갈아 뛰는 동작(P가 0.3~0.7)일 때만 보정합니다 (두 발 모아뛰기 등에는 적용하지 않음).
+  const INFER_MAX_GAP = 1.6, DUP_MIN_GAP = 0.6;
+  function sortedByFoot(ok) { const by = { R: [], L: [] }; for (const e of ok) by[e.foot].push(e.t); return by; }
+  const lastBefore = (arr, t) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < t) lo = m + 1; else hi = m; } return lo ? arr[lo - 1] : undefined; };
+  const hasBetween = (arr, a, b) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= a) lo = m + 1; else hi = m; } return lo < arr.length && arr[lo] < b; };
+  function stepModel(ok) {
+    const by = sortedByFoot(ok), cyc = [];
+    for (const f of ["R", "L"]) {
+      const a = by[f], o = by[f === "R" ? "L" : "R"];
+      for (let i = 1; i < a.length; i++) { const g = a[i] - a[i - 1]; if (g < 1.0 && hasBetween(o, a[i - 1], a[i])) cyc.push(g); }
+    }
+    if (cyc.length < 6) return null;
+    const C = median(cyc), ph = [];
+    for (const e of ok) {
+      const prev = lastBefore(by[e.foot === "R" ? "L" : "R"], e.t);
+      if (prev !== undefined && e.t - prev < C * 1.2) ph.push((e.t - prev) / C);
+    }
+    if (ph.length < 6) return null;
+    const P = median(ph);
+    return P < 0.3 || P > 0.7 ? null : { C, P };
+  }
+  // 중복 감지: 같은 발이 사이에 반대 발 없이 주기의 0.6배보다 가깝게 연달아 잡힌 경우의 '뒤의 것'
+  function findDuplicates(ok, model) {
+    const m = model || stepModel(ok), dups = new Set();
+    if (!m) return dups;
+    const by = sortedByFoot(ok);
+    for (const f of ["R", "L"]) {
+      const list = ok.filter(e => e.foot === f), o = by[f === "R" ? "L" : "R"];
+      for (let i = 1; i < list.length; i++) {
+        const g = list[i].t - list[i - 1].t;
+        if (g < m.C * DUP_MIN_GAP && !hasBetween(o, list[i - 1].t, list[i].t)) dups.add(list[i]);
+      }
+    }
+    return dups;
+  }
+  function inferSteps(ok, isOkAt, model) {
+    const m = model || stepModel(ok);
+    if (!m) return [];
+    const by = sortedByFoot(ok), out = [];
+    for (const f of ["R", "L"]) {
+      const a = by[f], other = f === "R" ? "L" : "R";
+      for (let i = 1; i < a.length; i++) {
+        const g = a[i] - a[i - 1];
+        if (g > m.C * INFER_MAX_GAP || g < m.C * DUP_MIN_GAP) continue;
+        if (hasBetween(by[other], a[i - 1], a[i])) continue;              // 사이에 반대 발이 이미 있으면 보충 불필요
+        const t = a[i - 1] + m.P * g;
+        if (isOkAt && !isOkAt(t)) continue;
+        out.push({ foot: other, t, airtime: 0, peak: 0, status: "ok", inferred: true });
+      }
+    }
+    return out.sort((x, y) => x.t - y.t);
+  }
+  function median(a) { const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; }
+
+  // ───── 측정 구간(세션)과 구간별 기록 ─────
+  // 시작 = 직접 정한 시각, 없으면 '줄을 처음 돌리기 시작한 때'(손목 정보가 없으면 첫 스텝). 종료 = 직접 정한 시각(강제 종료), 없으면 시작 + 측정 시간(0이면 제한 없음).
+  const SECTION_SEC = 10;   // 구간 길이
+  function computeSession(ropeIv, ropeKnown, firstEventT, marks, cfg) {
+    let start = marks.start;
+    if (start === null || start === undefined) {
+      if (ropeIv.length) start = Math.max(0, ropeIv[0].a);
+      else if (!ropeKnown && firstEventT !== null && firstEventT !== undefined) start = firstEventT;
+      else start = null;
+    }
+    let end = marks.end;
+    if ((end === null || end === undefined) && start !== null && cfg.MEASURE_SEC > 0) end = start + cfg.MEASURE_SEC;
+    if (end === undefined) end = null;
+    return { start, end, startManual: marks.start !== null && marks.start !== undefined, endManual: marks.end !== null && marks.end !== undefined };
+  }
+  const sessionState = (s, t) => (s.start === null || t < s.start) ? "before" : (s.end !== null && t > s.end) ? "ended" : "running";
+  // 구간별 R·L·미스 개수 (속도는 화면에서 '지금까지 흐른 시간'으로 계산)
+  function buildSections(counted, misses, s, tailT) {
+    if (s.start === null) return [];
+    const lastT = counted.length ? counted[counted.length - 1].t : s.start;
+    const stop = s.end !== null ? s.end : Math.max(lastT, tailT || 0, s.start + 0.001);
+    const n = Math.max(1, Math.ceil((stop - s.start) / SECTION_SEC - 1e-9));
+    const secs = [];
+    for (let i = 0; i < n; i++) {
+      const a = s.start + i * SECTION_SEC, b = Math.min(a + SECTION_SEC, stop), last = i === n - 1;
+      const inSec = (t) => t >= a && (last ? t <= b + 1e-9 : t < b);
+      secs.push({ i, a, b, rel: [i * SECTION_SEC, i * SECTION_SEC + SECTION_SEC],
+        R: counted.filter(e => e.foot === "R" && inSec(e.t)).length, L: counted.filter(e => e.foot === "L" && inSec(e.t)).length,
+        miss: misses.filter(m => inSec(m.t)).length });
+    }
+    return secs;
+  }
+
+  // ───── 화면과 테스트가 함께 쓰는 '최종 결과' 만들기 ─────
+  // src: { events, stops, handEvents, marks, ropeOnAt(t), ropeIntervals(), ropeKnown(), skipped }  (트래커가 만든 원자료)
+  // 순서: 실수 목록 → 측정 구간 → 스텝 판정(카운트/제외) → 놓친 스텝 보충 → 카운트·연속 스텝·구간 기록
+  function buildView(src, cfg, duration, nowT) {
+    const ivs = src.ropeIntervals();
+    const session = computeSession(ivs, src.ropeKnown(), src.events.length ? src.events[0].t : null, src.marks, cfg);
+    const gaps = ropeGaps(ivs, src.ropeTrackIssue, cfg);
+    const inSession = (t) => session.start === null || (t >= session.start - 0.5 && (session.end === null || t <= session.end));
+    const listed = computeMisses(src.stops, src.handEvents, cfg, duration, src.marks, gaps)
+      .filter(m => !m.auto || inSession(m.t))                                   // 측정 구간 밖의 자동 감지는 실수가 아님 (준비 동작·측정 종료 후)
+      .map(m => ({ ...m, counted: m.conf !== "low" || !!cfg.MISS_COUNT_LOW }));
+    const misses = listed.filter(m => m.counted);                               // 개수·연속 스텝·구간 기록에 넣는 실수
+    const all = classifyEvents(src.events, src.ropeOnAt, misses, cfg, session);
+    let ok = all.filter(e => e.status === "ok"), inferred = [];
+    if (cfg.STEP_INFER) {
+      const model = stepModel(ok);
+      if (model) {
+        for (const e of findDuplicates(ok, model)) e.status = "dup";          // 같은 발이 너무 가깝게 연달아 잡힌 것(중복) 제외
+        ok = ok.filter(e => e.status === "ok");
+        const wins = misses.filter(m => m.auto && m.t1 !== undefined).map(m => [m.t, m.t1]);
+        const isOkAt = (t) => {
+          if (session.start !== null && (t < session.start || (session.end !== null && t > session.end))) return false;
+          if (cfg.ROPE_GATE) { if (wins.some(([a, b]) => t >= a && t <= b)) return false; if (src.ropeOnAt(t) === false) return false; }
+          return true;
+        };
+        inferred = inferSteps(ok, isOkAt, stepModel(ok) || model);            // 빠진 스텝 보충
+      }
+    }
+    const counted = [...ok, ...inferred].sort((a, b) => a.t - b.t);
+    const sum = summarizeMisses(counted, misses);
+    sum.low = listed.filter(m => m.conf === "low").length;
+    sum.high = listed.filter(m => m.auto && m.conf === "high").length;
+    return { misses, listed, gaps, session, all, ok, inferred, counted, ...sum,
+      R: counted.filter(e => e.foot === "R").length, L: counted.filter(e => e.foot === "L").length,
+      exNorope: all.filter(e => e.status === "norope").length, exMiss: all.filter(e => e.status === "miss").length, exOut: all.filter(e => e.status === "out").length, exDup: all.filter(e => e.status === "dup").length,
+      skipped: src.skipped || 0, sections: buildSections(counted, misses, session, nowT) };
+  }
+
+  // 실수로 나뉜 연속 스텝 수: [첫 실수 전, 첫~둘째 실수 사이, ..., 마지막 실수 후]
+  function streaks(events, misses) {
+    const bounds = misses.map(m => m.t).sort((a, b) => a - b);
+    const counts = new Array(bounds.length + 1).fill(0);
+    for (const e of events) {
+      let k = 0;
+      while (k < bounds.length && e.t > bounds[k]) k++;
+      counts[k]++;
+    }
+    return counts;
+  }
+
+  // 실수 요약: 횟수, 현재/최대/평균 연속 스텝
+  function summarizeMisses(events, misses) {
+    const counts = streaks(events, misses);
+    const nonEmpty = counts.filter(c => c > 0);
+    return {
+      total: misses.length, auto: misses.filter(m => m.auto).length, manual: misses.filter(m => !m.auto).length,
+      counts, current: counts[counts.length - 1], best: Math.max(0, ...counts),
+      avg: misses.length && nonEmpty.length ? mean(nonEmpty) : null,
+    };
+  }
+
+  // ═══════════ 경기력 분석: 손·발 리듬 ═══════════
+  // 줄을 돌리는 손목은 몸통 기준으로 일정한 박자로 움직이고, 그 박자는 발 스텝 속도와 맞물려 있습니다
+  // (실제 영상: 손 박자 ≈ 발 스텝 속도의 1/2 또는 1배). 이 짝이 깨지면 줄과 발의 타이밍이 어긋난 것입니다.
+  // 미스 직전 2초를 '같은 선수의 평소 구간'과 비교해서 뚜렷하게 달랐던 점만 짚습니다(사람마다 기준이 다르므로 절대 기준을 쓰지 않음).
+  const PERF_WIN = 1.5, PERF_HOP = 0.25, PRE_SEC = 2.0, BASE_WIN = 2.0;
+  const SYNC_TOL = 0.12;            // 손 박자 ÷ 발 박자가 평소 비율에서 12% 넘게 벗어나면 '어긋남'
+  const LOCKS = [0.5, 1.0];         // 손 박자가 발 스텝 속도의 1/2 또는 1배로 맞물림
+  const lowerIdx = (arr, t) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].t < t) lo = m + 1; else hi = m; } return lo; };
+  const robust = (v, floor) => { const m = median(v); return { m, s: Math.max(floor(m), median(v.map(x => Math.abs(x - m))) * 1.4826) }; };
+
+  // a~b초 손목 움직임의 주된 박자(Hz)와 그 박자가 차지하는 비율 (표본이 부족하면 null)
+  function handFreq(track, a, b) {
+    const pts = []; for (let i = lowerIdx(track, a); i < track.length && track[i].t <= b; i++) pts.push(track[i]);
+    if (pts.length < 10 || pts[pts.length - 1].t - pts[0].t < (b - a) * 0.7) return null;
+    const mx = mean(pts.map(p => p.w[0])), my = mean(pts.map(p => p.w[1]));
+    let best = 0, bp = 0, tot = 0, prev = 0, prev2 = 0, bestIdx = -1; const pw = [];
+    for (let f = 1.5; f <= 9.001; f += 0.1) {
+      let rx = 0, ix = 0, ry = 0, iy = 0;
+      for (const p of pts) { const ang = 2 * Math.PI * f * (p.t - a), c = Math.cos(ang), s = Math.sin(ang); rx += (p.w[0] - mx) * c; ix += (p.w[0] - mx) * s; ry += (p.w[1] - my) * c; iy += (p.w[1] - my) * s; }
+      const v = rx * rx + ix * ix + ry * ry + iy * iy; pw.push([f, v]); tot += v;
+      if (v > bp) { bp = v; best = f; bestIdx = pw.length - 1; }
+    }
+    if (bestIdx > 0 && bestIdx < pw.length - 1) {                       // 꼭짓점 보간으로 0.1Hz보다 세밀하게
+      const y0 = pw[bestIdx - 1][1], y1 = pw[bestIdx][1], y2 = pw[bestIdx + 1][1], d = y0 - 2 * y1 + y2;
+      if (d < 0) best += 0.1 * 0.5 * (y0 - y2) / d;
+    }
+    return tot > 0 ? { f: best, share: bp / tot } : null;
+  }
+  // a~b초의 발 리듬: 속도(스텝/초) · 주기 변동(변동계수) · 발 높이
+  //   속도: 같은 발의 '첫 착지 ~ 마지막 착지 ÷ 주기 수' (한 주기씩 재면 30fps에서 1프레임 차이만으로 11%씩 출렁이므로 창 전체로 평균)
+  //   발 높이: 발마다 '그 발의 평소 높이' 대비 비율(norm) — 카메라 각도 때문에 두 발의 높이가 다르게 보여도 비교가 가능
+  function footStats(counted, a, b, norm) {
+    const ev = counted.filter(e => e.t >= a && e.t <= b);
+    const real = ev.filter(e => !e.inferred);
+    const out = { n: ev.length, rate: null, cv: null, lift: null, liftR: null, liftL: null };
+    const cyc = [], spans = [];
+    for (const f of ["R", "L"]) {
+      const ts = ev.filter(e => e.foot === f).map(e => e.t), c = [];
+      for (let i = 1; i < ts.length; i++) c.push(ts[i] - ts[i - 1]);
+      if (!c.length) continue;
+      const m = median(c);
+      if (c.every(x => x < m * 1.5 && x < 0.8)) spans.push([ts[ts.length - 1] - ts[0], c.length]);   // 빈틈 없이 이어진 경우만 평균 주기에 사용
+      cyc.push(...c.filter(x => x < 0.8));
+    }
+    const nC = spans.reduce((s, x) => s + x[1], 0);
+    if (nC >= 3) out.rate = 2 * nC / spans.reduce((s, x) => s + x[0], 0);
+    else if (cyc.length >= 3) out.rate = 2 / median(cyc);
+    const realCyc = [];
+    for (const f of ["R", "L"]) { const ts = real.filter(e => e.foot === f).map(e => e.t); for (let i = 1; i < ts.length; i++) if (ts[i] - ts[i - 1] < 0.8) realCyc.push(ts[i] - ts[i - 1]); }
+    if (realCyc.length >= 4) out.cv = sd(realCyc) / mean(realCyc);
+    const lifts = (f) => real.filter(e => !f || e.foot === f).map(e => e.peak);
+    if (lifts("R").length >= 2) out.liftR = median(lifts("R"));
+    if (lifts("L").length >= 2) out.liftL = median(lifts("L"));
+    const rel = norm ? real.filter(e => norm[e.foot] > 0).map(e => e.peak / norm[e.foot]) : lifts();
+    if (rel.length >= 3) out.lift = median(rel);
+    return out;
+  }
+  function windowStats(counted, track, a, b, norm) {
+    const f = footStats(counted, a, b, norm), hf = handFreq(track, a, b);
+    return { ...f, hand: hf ? hf.f : null, ratio: hf && f.rate ? hf.f / f.rate : null };
+  }
+  // 손 박자 ÷ 발 박자가 1/2배 또는 1배에 맞물려 있는지 (가장 가까운 쪽 기준 어긋난 정도)
+  const nearestLock = (r) => LOCKS.reduce((b, x) => Math.abs(r / x - 1) < Math.abs(r / b - 1) ? x : b, LOCKS[0]);
+  const lockOff = (r) => r / nearestLock(r) - 1;
+
+  // view: buildView 결과 / track: 손목 궤적 / endT: 분석이 진행된 시각
+  function performanceReport(view, track, endT) {
+    const s = view.session;
+    if (s.start === null) return null;
+    const s0 = s.start, s1 = s.end !== null ? Math.min(s.end, endT) : endT;
+    if (s1 - s0 < 4) return null;
+    const counted = view.counted.filter(e => e.t >= s0 && e.t <= s1), misses = view.misses.filter(m => m.t >= s0 && m.t <= s1);
+    const near = (a, b) => misses.some(m => b > m.t - 2.5 && a < (m.resumeT || m.t1 || m.t) + 1.0);   // 실수 전후는 '평소'에서 뺌
+    const norm = {};                                                                                    // 발마다 평소 높이
+    for (const f of ["R", "L"]) { const v = counted.filter(e => e.foot === f && !e.inferred && !near(e.t, e.t)).map(e => e.peak); norm[f] = v.length >= 3 ? median(v) : null; }
+
+    // 1) 시간에 따른 손·발 박자
+    const series = [];
+    for (let t = s0 + PERF_WIN / 2; t <= s1 - PERF_WIN / 2 + 1e-9; t += PERF_HOP) series.push({ t, ...windowStats(counted, track, t - PERF_WIN / 2, t + PERF_WIN / 2, norm) });
+    const calm = series.filter(p => p.ratio !== null && !near(p.t - PERF_WIN / 2, p.t + PERF_WIN / 2));
+    const lock = calm.length >= 4 ? nearestLock(median(calm.map(p => p.ratio))) : null;     // 이 선수에게 주로 보이는 손:발 비율 (그래프 환산용)
+    for (const p of series) p.sync = lock === null || p.ratio === null ? null : Math.abs(lockOff(p.ratio)) <= SYNC_TOL;
+    const judged = series.filter(p => p.sync !== null && !near(p.t - PERF_WIN / 2, p.t + PERF_WIN / 2));
+    const syncPct = judged.length >= 4 ? judged.filter(p => p.sync).length / judged.length : null;
+
+    // 2) 평소 기준: 실수와 떨어진 2초 창들의 중앙값과 흔들림 폭
+    const baseWins = [];
+    for (let a = s0; a + BASE_WIN <= s1 + 1e-9; a += 0.5) if (!near(a, a + BASE_WIN)) baseWins.push(windowStats(counted, track, a, a + BASE_WIN, norm));
+    const pick = (k) => baseWins.map(w => w[k]).filter(v => v !== null);
+    const base = {
+      rate: pick("rate").length >= 3 ? robust(pick("rate"), m => m * 0.03) : null,
+      cv: pick("cv").length >= 3 ? robust(pick("cv"), () => 0.02) : null,
+      lift: pick("lift").length >= 3 ? robust(pick("lift"), m => m * 0.05) : null,
+    };
+
+    // 3) 실수마다: 직전 2초가 평소와 달랐던 점 + 다시 시작하기까지 걸린 시간 + 잃은 스텝
+    const baseRate = base.rate ? base.rate.m : (counted.length / Math.max(1, s1 - s0));
+    const listed = view.listed.filter(m => m.t >= s0 && m.t <= s1);
+    const missDetails = listed.map((m, i) => {
+      const pre = windowStats(counted, track, m.t - PRE_SEC, m.t - 0.05, norm), flags = [];
+      const prev = listed.slice(0, i).reverse().find(p => p.counted);
+      const next = listed.slice(i + 1).find(p => p.counted);
+      const end = m.resumeT ? (next ? Math.min(m.resumeT, next.t) : m.resumeT) : null;     // 다음 실수가 먼저 오면 거기까지 (잃은 스텝을 두 번 세지 않게)
+      const recover = end !== null ? Math.max(0, end - m.t) : null;
+      if (prev && m.t < (prev.resumeT || prev.t1 || prev.t) + 1.0) {        // 직전 실수에서 다시 시작하는 도중 → 직전 2초는 '흐름'이 아니므로 비교하지 않음
+        flags.push({ key: "restart", text: "직전 실수(" + prev.t.toFixed(1) + "초)에서 다시 시작하는 도중에 또 걸림" });
+        return { m, at: m.t - s0, pre, flags, recover, lost: recover !== null ? recover * baseRate : null };
+      }
+      const z = (k) => base[k] && pre[k] !== null ? (pre[k] - base[k].m) / base[k].s : null;
+      if (pre.rate !== null && base.rate) {
+        const d = pre.rate / base.rate.m - 1, zz = z("rate");
+        if (zz <= -1.5 && d <= -0.06) flags.push({ key: "slow", text: "속도가 평소보다 " + Math.round(-d * 100) + "% 느려짐" });
+        else if (zz >= 1.5 && d >= 0.06) flags.push({ key: "fast", text: "속도를 평소보다 " + Math.round(d * 100) + "% 끌어올리던 중" });
+      }
+      if (pre.cv !== null && base.cv && z("cv") >= 1.5 && pre.cv - base.cv.m >= 0.04)
+        flags.push({ key: "irregular", text: "스텝 박자가 흔들림 (주기 변동 " + Math.round(base.cv.m * 100) + "% → " + Math.round(pre.cv * 100) + "%)" });
+      if (pre.lift !== null && base.lift) {
+        const d = pre.lift / base.lift.m - 1, zz = z("lift");
+        if (zz <= -1.5 && d <= -0.15) flags.push({ key: "low", text: "발을 평소보다 " + Math.round(-d * 100) + "% 낮게 듦" });
+        else if (zz >= 1.5 && d >= 0.2) flags.push({ key: "high", text: "발을 평소보다 " + Math.round(d * 100) + "% 높게 듦 (박자가 늦어지기 쉬움)" });
+      }
+      if (pre.ratio !== null && Math.abs(lockOff(pre.ratio)) > SYNC_TOL)
+        flags.push(lockOff(pre.ratio) > 0 ? { key: "desync", text: "손(줄) 박자가 발보다 빨라짐 — 발이 줄을 못 따라감" } : { key: "desync", text: "발 박자가 손(줄)보다 빨라짐 — 줄이 발을 못 따라감" });
+      return { m, at: m.t - s0, pre, flags, recover, lost: recover !== null ? recover * baseRate : null };
+    });
+
+    // 4) 구간별(10초) 흐름
+    const sections = view.sections.filter(x => x.a < s1).map(x => {
+      const b = Math.min(x.b, s1), st = windowStats(counted, track, x.a, b);
+      const sp = series.filter(p => p.t >= x.a && p.t < b && p.sync !== null && !near(p.t - PERF_WIN / 2, p.t + PERF_WIN / 2));
+      const st2 = windowStats(counted, track, x.a, b, norm);
+      const pp = series.filter(p => p.t >= x.a && p.t < b && p.rate !== null && !near(p.t - PERF_WIN / 2, p.t + PERF_WIN / 2)).map(p => p.rate);
+      return { ...x, len: b - x.a, avgRate: (x.R + x.L) / Math.max(0.5, b - x.a), pace: pp.length >= 3 ? median(pp) : null,       // pace: 실수 구간을 뺀 '뛰는 동안의 속도'
+               cv: st.cv, lift: st2.lift, sync: sp.length >= 3 ? sp.filter(p => p.sync).length / sp.length : null };
+    });
+
+    // 5) 전체 지표
+    const all = footStats(counted, s0, s1);
+    const full = sections.filter(x => x.len >= 5 && x.pace !== null);
+    const fade = full.length >= 2 ? full[full.length - 1].pace / full[0].pace : null;     // 후반 속도 유지율 (실수로 잃은 시간은 빼고 비교)
+    const rhythm = analyzeRhythm(view.ok.filter(e => e.t >= s0 && e.t <= s1));
+    const overall = { rate: counted.length / Math.max(0.5, s1 - s0), cycleRate: all.rate, cv: all.cv, liftR: all.liftR, liftL: all.liftL,
+                      balance: rhythm.balance, rl: rhythm.rl, lr: rhythm.lr, syncPct, lock, fade, duration: s1 - s0 };
+
+    // 6) 훈련 포인트 (근거가 있는 것만, 중요한 순서로 최대 4개)
+    const tips = [], md = missDetails.filter(d => d.m.counted);
+    const rec = md.map(d => d.recover).filter(v => v !== null);
+    if (rec.length) {
+      const avg = mean(rec), lost = Math.round(md.reduce((a, d) => a + (d.lost || 0), 0));
+      if (avg >= 0.8) tips.push({ key: "recover", text: "미스 후 다시 줄을 돌리기까지 평균 " + avg.toFixed(1) + "초 · 실수 " + md.length + "번으로 약 " + lost + "스텝을 잃었어요. 걸리면 바로 줄을 다시 잡아 돌리는 '재시작' 연습이 기록에 가장 직접적으로 도움이 됩니다." });
+    }
+    const flagNames = { restart: "다시 시작하는 도중에 또 걸리는", slow: "미스 직전에 속도가 떨어지는", fast: "속도를 끌어올리다 걸리는", irregular: "스텝 박자가 흔들린 뒤 걸리는", low: "발이 낮아진 뒤 걸리는", high: "발을 높이 들다 박자가 늦어져 걸리는", desync: "손과 발 박자가 어긋난 뒤 걸리는" };
+    const flagAdvice = { restart: "걸린 뒤에는 서두르지 말고 줄을 한 번 정확히 넘긴 다음 속도를 올려 보세요.", slow: "지치거나 박자를 놓치기 시작하면 속도를 억지로 버티기보다 일정한 박자를 유지하는 데 집중해 보세요.", fast: "가속은 한 번에 하지 말고 단계적으로 올려 보세요.", irregular: "메트로놈(박자기)에 맞춰 일정한 박자로 뛰는 연습이 좋아요.", low: "발끝이 일정한 높이로 올라오도록 의식해 보세요.", high: "발을 필요 이상으로 높이 들지 말고 낮고 빠르게 뛰어 보세요.", desync: "손목 회전과 발 스텝을 같은 박자로 맞추는 연습(천천히 → 빠르게)이 좋아요." };
+    if (md.length) {
+      const cnt = {}; for (const d of md) for (const k of new Set(d.flags.map(f => f.key))) cnt[k] = (cnt[k] || 0) + 1;
+      Object.entries(cnt).sort((a, b) => b[1] - a[1]).forEach(([k, n]) => {
+        if (n >= 2 || (md.length === 1 && n === 1)) tips.push({ key: k, text: flagNames[k] + " 경우가 " + md.length + "번 중 " + n + "번이었어요. " + flagAdvice[k] });
+      });
+      const quiet = md.filter(d => !d.flags.length).length;
+      if (quiet && quiet >= md.length / 2) tips.push({ key: "sudden", text: "미스 " + md.length + "번 중 " + quiet + "번은 직전 2초 동안 속도·박자·발 높이·손발 박자에 뚜렷한 변화가 없었어요. 흐름이 무너졌다기보다 순간적으로 걸린 경우라 줄 궤도(손목 위치를 몸 옆에 일정하게)와 집중력 유지가 중요합니다." });
+    }
+    if (fade !== null && fade < 0.93) tips.push({ key: "fade", text: "뛰는 동안의 속도가 후반에 떨어졌어요 (첫 구간 " + full[0].pace.toFixed(1) + " → 마지막 구간 " + full[full.length - 1].pace.toFixed(1) + " 스텝/초, " + Math.round((1 - fade) * 100) + "% 감소, 실수 구간 제외). 구간 반복(인터벌) 훈련으로 후반 속도 유지력을 키워 보세요." });
+    if (syncPct !== null && syncPct < 0.85) tips.push({ key: "sync", text: "실수 구간을 빼고도 손·발 박자가 맞물린 시간이 " + Math.round(syncPct * 100) + "%예요. 손목으로 줄을 돌리는 박자와 스텝 박자를 맞추는 연습이 필요해요." });
+    if (overall.liftR !== null && overall.liftL !== null && Math.min(overall.liftR, overall.liftL) / Math.max(overall.liftR, overall.liftL) < 0.75) {
+      const lowFoot = overall.liftR < overall.liftL ? "오른발" : "왼발";
+      tips.push({ key: "liftside", text: lowFoot + "을 상대적으로 낮게 들어요 (R " + overall.liftR.toFixed(2) + " / L " + overall.liftL.toFixed(2) + ", 몸통 대비). 카메라 각도 영향일 수도 있으니 정면 영상으로 한 번 더 확인해 보세요." });
+    }
+    if (!tips.length) tips.push({ key: "good", text: "측정 구간 동안 흐름이 안정적이었어요" + (fade !== null ? " (후반 속도 유지율 " + Math.round(fade * 100) + "%)" : "") + ". 지금 박자를 유지하면서 속도를 조금씩 올려 보세요." });
+    return { s0, s1, series, lock, base, missDetails, sections, overall, tips: tips.slice(0, 4) };
+  }
+
+  // CSV 문자열 만들기 (엑셀에서 한글이 깨지지 않도록 맨 앞에 BOM)
+  function buildCsv(events, summaryRows, missRows = []) {
+    const esc = (v) => { const s = String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const rows = [["항목", "값"], ...summaryRows, [], ["번호", "발", "착지 시각(초)", "체공 시간(초)", "최대 높이(몸통 대비)", "판정"]];
+    const verdict = (e) => e.inferred ? "카운트(추정 보충)" : e.status === "norope" ? "제외-줄 안 돌림" : e.status === "miss" ? "제외-실수 구간" : e.status === "out" ? "제외-측정 구간 밖" : e.status === "dup" ? "제외-중복 감지" : "카운트";
+    events.forEach((e, i) => rows.push([i + 1, e.foot, e.t.toFixed(3), e.inferred ? "" : e.airtime.toFixed(3), e.inferred ? "" : e.peak.toFixed(2), verdict(e)]));
+    if (missRows.length) rows.push([], ["실수 번호", "시각(초)", "판정", "근거", "직전 연속 스텝 수", "다시 줄을 돌리기까지(초)", "잃은 스텝(추정)", "직전 2초 동안 평소와 달랐던 점"], ...missRows);
+    return "﻿" + rows.map(r => r.map(esc).join(",")).join("\r\n");
+  }
+  // </Analysis>
+
+  // ── 화면 요소들 ──
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $("status"), fileInput = $("fileInput"), video = $("video"), canvas = $("overlay");
+  const stage = $("stage"), placeholder = $("placeholder"), debugEl = $("debugToggle");
+  const redoBtn = $("redoBtn"), resetBtn = $("resetBtn"), csvBtn = $("csvBtn"), pngBtn = $("pngBtn"), exportBtn = $("exportBtn");
+  const markBtn = $("markBtn");
+  const ctx = canvas.getContext("2d");
+
+  const tracker = createJumpTracker(JUMP_CONFIG);
+
+  // ② 그릴 관절 번호 (홀수 = 왼쪽, 짝수 = 오른쪽)
+  //    11,12 어깨 / 23,24 골반 / 25,26 무릎 / 27,28 발목 / 31,32 발끝
+  const LEFT_POINTS  = [11, 13, 15, 23, 25, 27, 31];     // 어깨 · 팔꿈치 · 손목 · 골반 · 무릎 · 발목 · 발끝
+  const RIGHT_POINTS = [12, 14, 16, 24, 26, 28, 32];
+  const LINES = [
+    [11, 12], [23, 24], [11, 23], [12, 24],
+    [11, 13], [13, 15], [12, 14], [14, 16],               // 팔: 어깨-팔꿈치-손목
+    [23, 25], [24, 26], [25, 27], [26, 28],
+    [27, 31], [28, 32],
+  ];
+  const MIN_VISIBILITY = 0.5;      // 이 값보다 잘 안 보이는 점은 그리지 않음 (0~1)
+
+  let poseLandmarker = null;
+  // 카메라 실시간 측정 상태: { stream, rec, chunks, mime, t0(첫 프레임의 캡처 시각), t(지금까지 흐른 초), delay(시작 전 대기 초), lastSec }
+  let live = null, liveDur = 0, scanNote = "";
+  // '지금 시각'과 '전체 길이': 파일 분석은 영상의 재생 위치·길이, 카메라는 측정을 시작한 뒤 흐른 시간
+  const curT = () => live ? live.t : (video.currentTime || 0);
+  let currentName = "video";
+  let currentUrl = null;
+
+  function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
+
+  // ③ 모델 준비하기
+  let visionFileset = null, modelDelegate = "GPU";
+  const makeOptions = (delegate, kind = "lite") => ({
+    baseOptions: { modelAssetPath: MODEL_URLS[kind], delegate },
+    runningMode: "VIDEO",
+    numPoses: 1,
+  });
+  async function setupModel() {
+    try {
+      visionFileset = await FilesetResolver.forVisionTasks(WASM_URL);
+      try {
+        poseLandmarker = await PoseLandmarker.createFromOptions(visionFileset, makeOptions("GPU"));
+      } catch (gpuError) {
+        console.warn("GPU 실패, CPU로 전환:", gpuError);
+        modelDelegate = "CPU";
+        poseLandmarker = await PoseLandmarker.createFromOptions(visionFileset, makeOptions("CPU"));
+      }
+      setStatus("✅ 준비 완료! mp4 영상을 선택하세요.", "ready");
+    } catch (e) {
+      console.error(e);
+      setStatus("❌ 모델을 불러오지 못했습니다. 인터넷 연결을 확인하세요.", "error");
+    }
+  }
+  const modelReady = setupModel();
+  // 분석을 시작할 때마다 모델을 새로 만들어서, MediaPipe 안에 남아 있는 '이전 프레임 기억'이 결과에 섞이지 않게 함
+  async function freshLandmarker(kind = "lite") {
+    if (poseLandmarker) { try { poseLandmarker.close(); } catch (e) { /* 이미 닫힘 */ } }
+    poseLandmarker = await PoseLandmarker.createFromOptions(visionFileset, makeOptions(modelDelegate, kind));
+  }
+  $("modelSel").value = modelKind;
+  $("modelSel").addEventListener("change", (e) => {
+    modelKind = e.target.value;
+    try { localStorage.setItem(MODEL_KEY, modelKind); } catch (err) { /* 무시 */ }
+    setStatus(`인식 모델: ${modelKind === "full" ? "정확(full)" : "빠름(lite)"} · 다음 분석부터 적용됩니다 ('처음부터 다시 분석')`, "ready");
+  });
+
+  // ═══════════ 기준값 슬라이더 ═══════════
+  const SLIDERS = [
+    { key: "LIFT_START_RATIO", label: "이륙 높이", min: 0.05, max: 0.6, step: 0.01, fmt: v => v.toFixed(2) + " (몸통 대비)",
+      hint: "발끝이 이만큼 올라가야 점프 시작. 올리면 더 높이 뛰어야 인정됩니다. 발마다 움직임이 작으면 자동으로 더 낮춰 적용되며, 이 값이 상한입니다." },
+    { key: "LAND_DROP_RATIO", label: "착지 판정 낙폭", min: 0.03, max: 0.4, step: 0.01, fmt: v => v.toFixed(2) + " (몸통 대비)",
+      hint: "최고점에서 이만큼 내려오면 착지. 너무 작으면 정점의 떨림을 착지로 오인합니다. 이 값도 발마다 자동으로 낮춰지는 상한입니다." },
+    { key: "MIN_AIRTIME_SEC", label: "최소 체공 시간", min: 0, max: 0.3, step: 0.01, fmt: v => v.toFixed(2) + "초",
+      hint: "이보다 짧게 떴다 내려오면 잡음으로 보고 제외합니다." },
+    { key: "MAX_AIRTIME_SEC", label: "최대 체공 시간", min: 0.2, max: 2, step: 0.05, fmt: v => v.toFixed(2) + "초",
+      hint: "이보다 오래 떠 있으면 발을 든 자세로 보고 제외합니다." },
+    { key: "SMOOTH_ALPHA", label: "떨림 보정", min: 0.2, max: 1, step: 0.05, fmt: v => v.toFixed(2) + (v >= 1 ? " (보정 없음)" : ""),
+      hint: "1이면 보정 없음. 작을수록 부드럽지만 반응이 느려집니다." },
+  ];
+  const MISS_SLIDERS = [
+    { key: "MISS_STOP_RATIO", label: "멈춤으로 볼 움직임 비율", min: 0.15, max: 0.7, step: 0.05, fmt: v => "평소의 " + Math.round(v * 100) + "% 미만",
+      hint: "직전 3초의 평소 움직임보다 이 비율 미만으로 줄면 멈춘 것으로 봅니다. 작을수록 확실히 멈췄을 때만 잡습니다." },
+    { key: "MISS_STOP_MIN_SEC", label: "멈춤이 이어져야 하는 시간", min: 0.15, max: 1.5, step: 0.05, fmt: v => v.toFixed(2) + "초",
+      hint: "멈춘 상태가 이 시간 이상 이어져야 실수로 인정합니다. 길게 잡으면 짧은 주춤은 무시합니다." },
+    { key: "MISS_RESUME_SEC", label: "멈춘 뒤 다시 달려야 하는 시간", min: 1, max: 10, step: 0.5, fmt: v => v.toFixed(1) + "초 안에",
+      hint: "멈춘 뒤 이 시간 안에 다시 달리면 줄에 걸린 실수, 다시 달리지 않으면 연기가 끝난 것으로 보고 실수로 세지 않습니다." },
+    { key: "MISS_HAND_RATIO", label: "손·팔이 튀는 정도", min: 2, max: 8, step: 0.5, fmt: v => "평소의 " + v.toFixed(1) + "배 이상",
+      hint: "다리가 달리는 중에 손목 속도가 직전 3초의 평소 값보다 이 배수 이상이면 줄이 걸린 것으로 봅니다. 크게 잡으면 확실히 튈 때만 잡습니다." },
+    { key: "MISS_HAND_MIN_SEC", label: "손 튐이 이어져야 하는 시간", min: 0.1, max: 0.8, step: 0.05, fmt: v => v.toFixed(2) + "초",
+      hint: "손목이 튄 상태가 이 시간 이상 이어져야 실수로 인정합니다." },
+    { key: "ROPE_ON_RATIO", label: "줄 돌림 판정 기준", min: 0.3, max: 0.7, step: 0.05, fmt: v => v.toFixed(2) + " 이상이면 줄 돌림",
+      hint: "손목·팔꿈치 움직임이 줄 돌리는 박자(초당 약 3~7회)에 이만큼 이상 몰려 있으면 줄이 돌고 있다고 봅니다. 낮추면 더 쉽게 '돌림'으로 판정합니다. 지금부터의 프레임에 적용됩니다." },
+  ];
+  const ALL_SLIDERS = [...SLIDERS, ...MISS_SLIDERS];
+  const BOOL_KEYS = ["MISS_AUTO", "MISS_HAND_AUTO", "ROPE_GATE", "STEP_INFER", "MISS_ROPE_AUTO", "MISS_COUNT_LOW"];
+  const MEASURE_OPTIONS = [0, 10, 20, 30, 60];
+  const STORE_KEY = "jumpCounter.config.v1";
+
+  function loadSavedConfig() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+      for (const s of ALL_SLIDERS) {
+        const v = saved[s.key];
+        if (typeof v === "number" && v >= s.min && v <= s.max) JUMP_CONFIG[s.key] = v;
+      }
+      for (const k of BOOL_KEYS) if (typeof saved[k] === "boolean") JUMP_CONFIG[k] = saved[k];
+      if (MEASURE_OPTIONS.includes(saved.MEASURE_SEC)) JUMP_CONFIG.MEASURE_SEC = saved.MEASURE_SEC;
+    } catch (e) { /* 저장소를 못 쓰는 환경이면 기본값 사용 */ }
+  }
+  function saveConfig() {
+    try {
+      const o = {};
+      for (const s of ALL_SLIDERS) o[s.key] = JUMP_CONFIG[s.key];
+      for (const k of BOOL_KEYS) o[k] = JUMP_CONFIG[k];
+      o.MEASURE_SEC = JUMP_CONFIG.MEASURE_SEC;
+      localStorage.setItem(STORE_KEY, JSON.stringify(o));
+    } catch (e) { /* 무시 */ }
+  }
+
+  function buildSliders(boxId, list) {
+    const box = $(boxId); box.innerHTML = "";
+    for (const s of list) {
+      const wrap = document.createElement("div"); wrap.className = "slider";
+      wrap.innerHTML = `<div class="row"><label for="sl-${s.key}">${s.label}</label><output id="out-${s.key}"></output></div>
+        <input type="range" id="sl-${s.key}" min="${s.min}" max="${s.max}" step="${s.step}">
+        <div class="hint">${s.hint}</div>`;
+      box.appendChild(wrap);
+      const input = wrap.querySelector("input"), out = wrap.querySelector("output");
+      input.value = JUMP_CONFIG[s.key]; out.textContent = s.fmt(JUMP_CONFIG[s.key]);
+      input.addEventListener("input", () => {
+        const v = parseFloat(input.value);
+        JUMP_CONFIG[s.key] = v;          // 카운터가 이 객체를 그대로 읽으므로 바로 반영됨
+        out.textContent = s.fmt(v);
+        saveConfig(); refreshUI(true);
+      });
+    }
+  }
+  function buildAllControls() {
+    buildSliders("sliders", SLIDERS);
+    buildSliders("missSliders", MISS_SLIDERS);
+    $("missAuto").checked = JUMP_CONFIG.MISS_AUTO;
+    $("missHand").checked = JUMP_CONFIG.MISS_HAND_AUTO;
+    $("ropeGate").checked = JUMP_CONFIG.ROPE_GATE;
+    $("stepInfer").checked = JUMP_CONFIG.STEP_INFER;
+    $("missRope").checked = JUMP_CONFIG.MISS_ROPE_AUTO;
+    $("missCountLow").checked = JUMP_CONFIG.MISS_COUNT_LOW;
+    $("measureSel").value = String(JUMP_CONFIG.MEASURE_SEC);
+  }
+  $("missAuto").addEventListener("change", (e) => { JUMP_CONFIG.MISS_AUTO = e.target.checked; saveConfig(); refreshUI(true); });
+  $("stepInfer").addEventListener("change", (e) => { JUMP_CONFIG.STEP_INFER = e.target.checked; saveConfig(); refreshUI(true); });
+  $("measureSel").addEventListener("change", (e) => { JUMP_CONFIG.MEASURE_SEC = parseInt(e.target.value, 10); saveConfig(); refreshUI(true); });
+  $("ropeGate").addEventListener("change", (e) => { JUMP_CONFIG.ROPE_GATE = e.target.checked; saveConfig(); refreshUI(true); });
+  $("missHand").addEventListener("change", (e) => { JUMP_CONFIG.MISS_HAND_AUTO = e.target.checked; saveConfig(); refreshUI(true); });
+  $("missRope").addEventListener("change", (e) => { JUMP_CONFIG.MISS_ROPE_AUTO = e.target.checked; saveConfig(); refreshUI(true); });
+  $("missCountLow").addEventListener("change", (e) => { JUMP_CONFIG.MISS_COUNT_LOW = e.target.checked; saveConfig(); refreshUI(true); });
+  $("defaultsBtn").addEventListener("click", () => {
+    for (const s of ALL_SLIDERS) JUMP_CONFIG[s.key] = DEFAULT_CONFIG[s.key];
+    for (const k of BOOL_KEYS) JUMP_CONFIG[k] = DEFAULT_CONFIG[k];
+    JUMP_CONFIG.MEASURE_SEC = DEFAULT_CONFIG.MEASURE_SEC;
+    saveConfig(); buildAllControls(); refreshUI(true);
+  });
+  loadSavedConfig();
+  buildAllControls();
+
+  // ═══════════ 실수(줄에 걸림 등) ═══════════
+  // 자동 감지 + 수동 표시를 합친 최종 목록과 연속 스텝 요약 (계산은 위의 순수 함수들이 함)
+  //   + 줄이 안 돌 때·실수 구간의 스텝을 뺀 '카운트할 스텝'(counted)과 좌우 횟수(R, L)
+  let viewKey = "", viewVal = null;
+  function getMissInfo() {
+    const dur = (!live && Number.isFinite(video.duration)) ? video.duration : null;
+    const rl = tracker.ropeLatest(), C = JUMP_CONFIG, M = tracker.marks;
+    const tNow = Math.max(0, tracker.getState().analyzedUntil);    // 구간 기록은 재생 위치가 아니라 '분석이 진행된 시점'까지를 기준으로 함
+    const key = [tracker.events.length, tracker.stops.length, tracker.handEvents.length, rl ? rl.t : "-", rl ? rl.on : "-",
+      M.manual.length, M.dismissed.size, M.confirmed.size, M.start, M.end, C.MISS_ROPE_AUTO, C.MISS_COUNT_LOW, tracker.ropeIntervals().length,
+      tracker.stops.map(s => (s.resumed ? 1 : 0) + ":" + Math.round(s.dur * 10)).join(","), tracker.handEvents.map(e => Math.round(e.dur * 10) + (e.ongoing ? "o" : "")).join(","),
+      C.MISS_AUTO, C.MISS_HAND_AUTO, C.ROPE_GATE, C.ROPE_ON_RATIO, C.MISS_RESUME_SEC, C.MISS_STOP_RATIO, C.MISS_STOP_MIN_SEC, C.MISS_HAND_RATIO, C.MISS_HAND_MIN_SEC,
+      C.MEASURE_SEC, C.STEP_INFER, (C.MEASURE_SEC === 0 && M.end === null) ? Math.floor(tNow) : 0, dur].join("|");
+    if (key === viewKey && viewVal) return viewVal;
+    viewKey = key;
+    viewVal = buildView({ events: tracker.events, stops: tracker.stops, handEvents: tracker.handEvents, marks: M,
+      ropeOnAt: (t) => tracker.ropeOnAt(t), ropeIntervals: () => tracker.ropeIntervals(), ropeKnown: () => tracker.ropeKnown(), ropeTrackIssue: (a, b) => tracker.ropeTrackIssue(a, b),
+      skipped: tracker.feet.R.skipped + tracker.feet.L.skipped }, C, dur, tNow);
+    return viewVal;
+  }
+  // 한 스텝의 판정 문구 (e: 스텝 기록)
+  const verdictText = (e) => e.inferred ? "카운트(추정 보충)" : e.status === "norope" ? "제외: 줄이 안 돌고 있음" : e.status === "miss" ? "제외: 실수 구간"
+    : e.status === "out" ? "제외: 측정 구간 밖" : e.status === "dup" ? "제외: 중복 감지" : "카운트";
+  const allRows = (mi) => [...mi.all, ...mi.inferred].sort((a, b) => a.t - b.t);     // 원본 스텝 + 추정 보충 스텝(시간순)
+  // 실수의 근거를 사람이 읽는 문장으로 (예: "손·팔 튐(평소의 11.5배) + 줄 리듬 끊김 2.4초")
+  function missEvidence(m) {
+    if (m.kind === "manual") return "수동 표시";
+    const going = m.ongoing && !video.ended ? " (이어지는 중)" : "";
+    return m.evidence.map(k => k === "stop" ? "달리다 멈춤" + (m.dur ? " " + m.dur.toFixed(1) + "초" : "")
+      : k === "hand" ? "손·팔 튐" + (m.handPeak ? "(평소의 " + m.handPeak.toFixed(1) + "배)" : "")
+      : "줄 리듬 끊김" + (m.resumeT ? " " + (m.resumeT - m.t).toFixed(1) + "초" : "")).join(" + ") + going;
+  }
+  const confText = (m) => m.kind === "manual" ? "수동" : m.conf === "high" ? "확실" : "의심";
+  function missKind(m) { return confText(m) + " · " + missEvidence(m) + (m.counted === false ? " · 개수에서 제외" : ""); }
+  const setMissMsg = (text) => { $("missMsg").textContent = text; };
+
+  function markMiss() {
+    if ((!video.src && !live) || stage.style.display !== "block") return;
+    const t = curT();
+    if (getMissInfo().misses.some(m => Math.abs(m.t - t) < 0.8 || Math.abs(m.detectT - t) < 0.8)) {
+      setMissMsg("이 근처에는 이미 실수가 표시되어 있어요."); return;
+    }
+    tracker.marks.manual.push(t);
+    setMissMsg(`${t.toFixed(2)}초에 실수를 표시했어요.`);
+    refreshUI(true);
+  }
+  markBtn.addEventListener("click", markMiss);
+  $("startHereBtn").addEventListener("click", () => { tracker.marks.start = curT(); refreshUI(true); });
+  $("endHereBtn").addEventListener("click", () => { tracker.marks.end = curT(); refreshUI(true); });
+  $("autoSessBtn").addEventListener("click", () => { tracker.marks.start = null; tracker.marks.end = null; refreshUI(true); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() !== "m" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "TEXTAREA" || el.tagName === "SELECT" || (el.tagName === "INPUT" && !["range", "checkbox", "file"].includes(el.type)))) return;
+    markMiss();
+  });
+
+  // 실수 목록 그리기 (내용이 바뀔 때만 다시 그려서, 누르는 도중 버튼이 바뀌지 않게 함)
+  let lastMissSig = "";
+  function renderMissList(info) {
+    const low = info.listed.filter(m => m.conf === "low").length;
+    $("missTitle").textContent = `실수 목록 (${info.total}회${low ? ` · 의심 ${low}건 확인 필요` : ""})`;
+    $("restoreBtn").hidden = tracker.marks.dismissed.size === 0;
+    const sig = JSON.stringify([info.listed.map(m => [m.key, m.ongoing ? "o" : m.kind, m.conf, m.counted, m.evidence.join(), Math.round((m.dur || 0) * 10)]), info.counts]);
+    if (sig === lastMissSig) return;
+    lastMissSig = sig;
+    const box = $("missList");
+    if (!info.listed.length) {
+      box.innerHTML = '<div class="missempty">아직 실수가 없습니다. 자동 감지가 켜져 있으면 줄에 걸릴 때 여기에 쌓입니다.</div>';
+      return;
+    }
+    let j = -1;
+    box.innerHTML = info.listed.map((m, i) => {
+      if (m.counted) j++;
+      const streak = m.counted ? `직전 연속 <b>${info.counts[j]}</b>스텝` : "개수에서 제외됨";
+      return `<div class="missitem">
+      <i class="tri${m.conf === "low" ? " hollow" : ""}"></i>
+      <span class="info"><span class="conf ${m.conf === "low" ? "low" : "high"}">${confText(m)}</span><b>${i + 1}번 · ${m.t.toFixed(2)}초</b> · ${missEvidence(m)} · ${streak}</span>
+      <button class="btn small" data-act="seek" data-t="${m.t}">▶ 이동</button>
+      ${m.conf === "low" && m.auto ? `<button class="btn small" data-act="confirm" data-key="${m.key}" title="장면을 보고 실수가 맞으면 누르세요">확인</button>` : ""}
+      <button class="btn small" data-act="del" data-keys="${m.keys.join(",")}" data-auto="${m.auto ? 1 : 0}">삭제</button></div>`;
+    }).join("");
+  }
+  $("missList").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.act === "seek") { if (live || !video.src) return; video.currentTime = Math.max(0, parseFloat(b.dataset.t) - 1); return; }   // 실수 1초 전 장면으로
+    if (b.dataset.act === "confirm") { tracker.marks.confirmed.add(b.dataset.key); refreshUI(true); return; }
+    if (b.dataset.act === "del") {
+      if (b.dataset.auto === "1") b.dataset.keys.split(",").forEach(k => tracker.marks.dismissed.add(k));
+      else {
+        const i = tracker.marks.manual.findIndex(t => "m" + Math.round(t * 1000) === b.dataset.keys);
+        if (i >= 0) tracker.marks.manual.splice(i, 1);
+      }
+      refreshUI(true);
+    }
+  });
+  $("restoreBtn").addEventListener("click", () => { tracker.marks.dismissed.clear(); refreshUI(true); });
+
+  // ═══════════ 영상 불러오기 ═══════════
+  function loadFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith("video/") && !/\.(mp4|mov|m4v|webm)$/i.test(file.name)) {
+      setStatus("❌ 영상 파일이 아닙니다.", "error"); return;
+    }
+    if (exporting) cancelExport();
+    if (live) stopLive(true);
+    scanNote = ""; liveDur = 0;
+    scanToken++; scanning = false; scanDone = false;     // 진행 중이던 정밀 분석은 중단
+    tracker.resetAll(); lastTime = -1;
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = URL.createObjectURL(file);        // 파일을 서버에 올리지 않고 브라우저 안에서만 사용
+    currentName = file.name;
+    video.src = currentUrl;
+    stage.style.display = "block"; placeholder.style.display = "none";
+    for (const b of [redoBtn, resetBtn, pngBtn, exportBtn, markBtn, $("bigBtn"), $("startHereBtn"), $("endHereBtn"), $("autoSessBtn")]) b.disabled = false;
+    refreshUI(true);
+    startScan();
+  }
+
+  // ═══════════ 휴대폰 편의: 화면 꺼짐 방지 · 크게 보기 ═══════════
+  let wakeLock = null;
+  async function keepAwake(on) {          // 분석·측정 중에는 화면이 꺼지지 않게 (지원하지 않는 브라우저는 그냥 넘어감)
+    try {
+      if (on && !wakeLock && navigator.wakeLock && !document.hidden) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      } else if (!on && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+    } catch (e) { wakeLock = null; }
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && (live || scanning)) keepAwake(true); });
+  function setBig(on) {
+    document.body.classList.toggle("bigview", on);
+    $("bigStop").hidden = !live;
+    refreshUI(true);
+  }
+  $("bigBtn").addEventListener("click", () => setBig(true));
+  $("bigExit").addEventListener("click", () => setBig(false));
+  $("bigMiss").addEventListener("click", () => markMiss());
+  $("bigStop").addEventListener("click", () => { if (live) stopLive(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.body.classList.contains("bigview")) setBig(false); });
+
+  // ═══════════ 정밀 분석 (프레임을 하나씩 넘기며 분석) ═══════════
+  // 영상을 '재생'하면서 분석하면 컴퓨터가 바쁜 정도에 따라 프레임을 건너뛰거나 타이밍이 달라져서 측정할 때마다 값이 조금씩 달라집니다.
+  // 그래서 영상을 멈춰 둔 채 일정한 간격으로 한 프레임씩 이동 → 분석을 끝까지 반복합니다. (느리지만) 같은 영상은 항상 같은 결과가 나옵니다.
+  // 분석이 끝나면 재생은 결과를 보여 주기만 합니다.
+  let scanning = false, scanDone = false, scanToken = 0;
+  const nextEvent = (el, name, ms) => new Promise((res) => {
+    const h = () => { clearTimeout(tm); el.removeEventListener(name, h); res(true); };
+    const tm = setTimeout(() => { el.removeEventListener(name, h); res(false); }, ms);
+    el.addEventListener(name, h);
+  });
+  // 프레임 한 장의 길이(초): 잠깐 재생하면서 프레임이 나오는 시각의 간격 중앙값
+  async function probeFrameDur() {
+    const fallback = 1 / 30;
+    if (typeof video.requestVideoFrameCallback !== "function") return fallback;
+    const times = [];
+    await new Promise((resolve) => {
+      let finished = false;
+      const finish = () => { if (finished) return; finished = true; video.pause(); resolve(); };
+      const cb = (now, meta) => { times.push(meta.mediaTime); if (times.length >= 16) finish(); else video.requestVideoFrameCallback(cb); };
+      video.requestVideoFrameCallback(cb);
+      video.play().catch(finish);
+      setTimeout(finish, 2000);
+    });
+    const d = [];
+    for (let i = 1; i < times.length; i++) { const x = times[i] - times[i - 1]; if (x > 0.004 && x < 0.2) d.push(x); }
+    if (d.length < 4) return fallback;
+    d.sort((a, b) => a - b);
+    return d[Math.floor(d.length / 2)];
+  }
+  async function startScan() {
+    const token = ++scanToken;
+    scanning = true; scanDone = false;
+    keepAwake(true);
+    redoBtn.textContent = "⏹ 분석 중단";
+    video.controls = false;
+    setStatus("⏳ 분석 준비 중...", "ready");
+    try {
+      await modelReady;
+      if (!poseLandmarker || !visionFileset) { setStatus("❌ 모델이 준비되지 않았습니다. 페이지를 새로고침해 주세요.", "error"); throw new Error("no model"); }
+      if (video.readyState < 1) await nextEvent(video, "loadedmetadata", 10000);
+      if (!Number.isFinite(video.duration)) {      // 카메라 녹화본(webm 등): 끝으로 한 번 건너뛰면 브라우저가 길이를 계산함
+        video.currentTime = 1e7; await nextEvent(video, "seeked", 5000); await nextEvent(video, "timeupdate", 300);
+        video.currentTime = 0; await nextEvent(video, "seeked", 3000);
+      }
+      if (token !== scanToken) return;
+      setStatus(`⏳ ${modelKind === "full" ? "정확(full)" : "빠름(lite)"} 모델 준비 중...`, "ready");
+      await freshLandmarker(modelKind);
+      tracker.resetAll(); lastTime = -1; mpBase = 0; lastMpTs = -1; replayShown = false;
+      if (video.currentTime > 0) { video.currentTime = 0; await nextEvent(video, "seeked", 3000); }
+      const frameDur = await probeFrameDur();
+      if (token !== scanToken) return;
+      const step = frameDur;      // 모든 프레임을 분석 (60fps 영상에서 한 장씩 건너뛰면 카운트가 1~2개 줄어듦)
+      const dur = video.duration;
+      const total = Math.max(1, Math.floor((dur - frameDur / 2) / step));
+      const t0 = performance.now();
+      let pausedMs = 0;
+      for (let i = 0; i < total; i++) {
+        if (token !== scanToken) return;
+        if (document.hidden) {                       // 다른 앱으로 갔거나 화면이 꺼지면 영상 이동이 멈추므로, 돌아올 때까지 기다렸다 이어서 분석
+          const p0 = performance.now();
+          setStatus("⏸ 화면으로 돌아오면 분석을 이어 갑니다", "ready");
+          while (document.hidden && token === scanToken) await nextEvent(document, "visibilitychange", 60000);
+          pausedMs += performance.now() - p0;
+          if (token !== scanToken) return;
+        }
+        const t = i * step;
+        video.currentTime = t + frameDur / 2;      // 그 프레임의 한가운데로 이동 (경계에 걸려 이웃 프레임이 잡히는 것을 방지)
+        await nextEvent(video, "seeked", 3000);
+        if (token !== scanToken) return;
+        analyzeFrame(t);
+        if (i % 4 === 0) {
+          const pct = Math.round((i + 1) / total * 100), el = (performance.now() - t0 - pausedMs) / 1000;
+          const left = i > 8 ? Math.max(0, Math.round(el / (i + 1) * (total - i - 1))) : null;
+          setStatus(`🔍 정밀 분석 중... ${pct}%${left !== null ? ` · 약 ${left}초 남음` : ""}`, "ready");
+        }
+      }
+      scanDone = true;
+    } catch (e) {
+      if (token === scanToken) console.error(e);
+    } finally {
+      if (token === scanToken) endScanUI();
+    }
+  }
+  function endScanUI() {
+    scanning = false;
+    if (!live) keepAwake(false);
+    redoBtn.textContent = "⏮ 처음부터 다시 분석";
+    video.controls = true;
+    tracker.resetTracking();
+    video.currentTime = 0;
+    refreshUI(true);
+    if (scanDone) setStatus(doneText() + (scanNote ? " · " + scanNote : "") + " · ▶ 재생하면 결과가 표시됩니다", "ready");
+    else setStatus("⏹ 분석을 중단했습니다 · 지금까지의 기록은 남아 있습니다 (처음부터 다시 분석을 누르면 끝까지 분석)", "ready");
+  }
+  fileInput.addEventListener("change", () => loadFile(fileInput.files[0]));
+  document.addEventListener("dragover", (e) => e.preventDefault());
+  document.addEventListener("drop", (e) => { e.preventDefault(); loadFile(e.dataTransfer.files[0]); });
+
+  // ═══════════ 카메라 실시간 측정 ═══════════
+  // 카메라 화면을 '프레임이 들어올 때마다' 분석합니다(파일 재생 분석과 같은 로직). 컴퓨터가 느리면 일부 프레임은 건너뛰므로
+  // 정확한 최종 값은 측정하는 동안 녹화해 둔 영상을 끝난 뒤 한 프레임씩 다시 분석(정밀 분석)해서 냅니다.
+  const liveBtn = $("liveBtn");
+  function liveFrame(now, meta) {
+    const ct = (meta && (meta.captureTime ?? meta.presentationTime)) ?? now;     // 카메라가 그 프레임을 찍은 시각(ms)
+    if (live.t0 === null) live.t0 = ct;
+    const t = Math.max(0, (ct - live.t0) / 1000);
+    live.lastAt = performance.now();
+    if (live.n > 0 && t - live.t < 0.005) return;      // 시각은 항상 앞으로만 (같은 시각의 프레임이 또 오면 건너뜀)
+    live.n++;
+    analyzeFrame(t);
+    const sec = Math.floor(t);
+    if (sec !== live.lastSec) {
+      live.lastSec = sec;
+      const s = getMissInfo().session, st = sessionState(s, t);
+      setStatus(t < live.delay ? `⏱ ${Math.ceil(live.delay - t)}초 뒤 시작 · 머리부터 발끝까지 화면에 다 보이게 서 주세요`
+        : st === "before" ? "🔴 준비됨 · 줄을 돌리기 시작하면 측정이 시작됩니다"
+        : st === "ended" ? "🔴 측정 시간이 끝났습니다 · 마무리하는 중..." : `🔴 측정 중 · ${Math.max(0, t - s.start).toFixed(0)}초`, "rec");
+    }
+    const s = getMissInfo().session;
+    if (s.end !== null && t > s.end + 1) stopLive();       // 측정 시간이 끝나면 자동으로 마무리
+  }
+  async function startLive() {
+    if (live) { stopLive(); return; }
+    if (typeof video.requestVideoFrameCallback !== "function" || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus("❌ 이 브라우저는 카메라 실시간 측정을 지원하지 않습니다. 최신 Chrome을 사용해 주세요.", "error"); return;
+    }
+    if (exporting) cancelExport();
+    scanToken++; scanning = false; scanDone = false; scanNote = ""; liveDur = 0;
+    liveBtn.disabled = true; setStatus("⏳ 카메라를 켜는 중... (권한을 물어보면 '허용'을 눌러 주세요)", "ready");
+    let stream = null;
+    try {
+      await modelReady;
+      if (!poseLandmarker || !visionFileset) throw new Error("모델이 준비되지 않았습니다. 페이지를 새로고침해 주세요.");
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: $("camSel").value }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+      await freshLandmarker("lite");
+      tracker.resetAll(); lastTime = -1; mpBase = 0; lastMpTs = -1; replayShown = false;
+      if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
+      video.removeAttribute("src"); video.srcObject = stream; video.controls = false;
+      currentName = "카메라_" + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+      stage.style.display = "block"; placeholder.style.display = "none";
+      for (const b of [redoBtn, resetBtn, pngBtn, markBtn, $("startHereBtn"), $("endHereBtn"), $("autoSessBtn")]) b.disabled = false;
+      redoBtn.disabled = true; exportBtn.disabled = true;
+      await video.play();
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      let rec = null; const mime = pickMime(), chunks = [];
+      if (mime && $("liveRescan").checked) {
+        try { rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 }); rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); }; rec.start(1000); } catch (e) { rec = null; }
+      }
+      live = { stream, rec, chunks, mime, t0: null, t: 0, n: 0, lastSec: -1, lastAt: performance.now(), delay: parseInt($("liveDelay").value, 10) || 0 };
+      live.timer = setInterval(() => {
+        if (!live) return;
+        const gap = (performance.now() - live.lastAt) / 1000;
+        if (gap > 10) { stopLive(); }
+        else if (gap > 3) setStatus(`⚠ 카메라 화면이 ${Math.round(gap)}초째 들어오지 않습니다. 카메라 연결을 확인해 주세요.`, "error");
+      }, 1000);
+      liveBtn.textContent = "⏹ 측정 끝내기"; liveBtn.classList.add("danger"); liveBtn.disabled = false;
+      $("bigBtn").disabled = false;
+      keepAwake(true);
+      if (IS_TOUCH) setBig(true); else $("bigStop").hidden = false;     // 휴대폰은 바로 크게 보기 (멀리서도 카운터가 보이게)
+      refreshUI(true);
+    } catch (e) {
+      console.error(e);
+      if (stream) stream.getTracks().forEach(tk => tk.stop());
+      liveBtn.disabled = false; live = null;
+      const name = e && e.name;
+      setStatus(name === "NotAllowedError" ? "❌ 카메라 사용이 허용되지 않았습니다. 주소창의 카메라 아이콘에서 허용한 뒤 다시 눌러 주세요."
+        : name === "NotFoundError" ? "❌ 카메라를 찾지 못했습니다. 카메라가 연결되어 있는지 확인해 주세요."
+        : name === "NotReadableError" ? "❌ 카메라를 다른 프로그램이 쓰고 있습니다. 그 프로그램을 닫고 다시 눌러 주세요." : "❌ " + (e && e.message || e), "error");
+    }
+  }
+  async function stopLive(skipScan) {
+    if (!live) return;
+    const L = live; live = null; liveDur = L.t; clearInterval(L.timer);
+    liveBtn.disabled = true;
+    if (L.rec && L.rec.state !== "inactive") await new Promise((res) => { L.rec.onstop = res; L.rec.stop(); });
+    L.stream.getTracks().forEach(tk => tk.stop());
+    video.pause(); video.srcObject = null;
+    liveBtn.textContent = "📷 카메라로 실시간 측정"; liveBtn.classList.remove("danger"); liveBtn.disabled = false;
+    $("bigStop").hidden = true;
+    if (document.body.classList.contains("bigview")) setBig(false);
+    keepAwake(false);
+    video.controls = true; exportBtn.disabled = false; redoBtn.disabled = false;
+    const liveText = doneText();
+    refreshUI(true);
+    if (skipScan || !L.chunks.length) { setStatus(liveText + " (카메라 실시간 측정)", "ready"); return; }
+    const v = getMissInfo();
+    scanNote = `실시간 측정값은 R ${v.R} / L ${v.L}`;
+    const url = URL.createObjectURL(new Blob(L.chunks, { type: L.mime }));
+    if (currentUrl) URL.revokeObjectURL(currentUrl);
+    currentUrl = url; video.src = url;
+    setStatus("⏳ 녹화본을 한 프레임씩 다시 분석합니다 (정밀 분석)...", "ready");
+    startScan();
+  }
+  liveBtn.addEventListener("click", startLive);
+  window.addEventListener("pagehide", () => { if (live) live.stream.getTracks().forEach(tk => tk.stop()); });
+
+  function doneText() {
+    const v = getMissInfo();
+    return `✅ 분석 완료 · R ${v.R} / L ${v.L} (합계 ${v.R + v.L}) · 실수 ${v.total}회`;
+  }
+  redoBtn.addEventListener("click", () => {
+    if (live) return;
+    if (scanning) { scanToken++; endScanUI(); return; }      // 분석 중에는 '중단' 버튼 (지금까지의 기록은 남김)
+    if (exporting) cancelExport();
+    startScan();
+  });
+  resetBtn.addEventListener("click", () => { if (scanning) { scanToken++; endScanUI(); } scanDone = false; tracker.resetAll(); lastTime = -1; refreshUI(true); setStatus("🔄 횟수를 초기화했습니다 · 재생하면 실시간으로 다시 셉니다 (같은 값이 필요하면 '처음부터 다시 분석')", "ready"); });
+
+  // 사용자가 재생바를 움직이면 발 추적만 새로 시작합니다. 횟수·실수 기록은 유지되고, 이미 분석한 구간을 다시 보는 동안에는 중복으로 세지 않습니다.
+  video.addEventListener("seeking", () => { if (!scanning) tracker.resetTracking(); });
+  video.addEventListener("seeked", () => { if (!scanning) refreshUI(true); });
+  video.addEventListener("pause", () => { if (!scanning) refreshUI(true); });
+  video.addEventListener("loadedmetadata", () => {
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    if (video.videoWidth && video.videoHeight) stage.style.setProperty("--ar", video.videoWidth / video.videoHeight);   // 크게 보기에서 영상 비율 유지
+  });
+  video.addEventListener("resize", () => {          // 카메라는 휴대폰을 돌리면 해상도·방향이 바뀜
+    if (!video.videoWidth) return;
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    stage.style.setProperty("--ar", video.videoWidth / video.videoHeight);
+  });
+  video.addEventListener("ended", () => {
+    if (scanning) return;
+    refreshUI(true);
+    if (exporting) { finishExport(); return; }
+    setStatus(doneText(), "ready");
+  });
+  video.addEventListener("play", () => { if (!exporting && !scanning) setStatus(scanDone ? "▶ 재생 중 · 분석 결과가 표시됩니다" : "▶ 분석 중...", "ready"); });
+
+  // ⑤ 매 화면 갱신마다 새 프레임이 있으면 분석 → 카운트 → 그리기
+  let lastTime = -1, replayShown = false;
+  // 영상의 '새 프레임' 하나를 분석 → 카운트 → 그리기
+  //   t: 그 프레임의 실제 영상 시간(초). 같은 프레임을 두 번 모델에 넣으면 MediaPipe의 움직임 보정이 작은 동작(줄 돌리는 손목)을 눌러 버리므로,
+  //   가능하면 requestVideoFrameCallback으로 '프레임이 나올 때마다 정확히 한 번' 분석한다.
+  //   모델에 넘기는 시각도 '프레임의 실제 영상 시간'으로: 처리가 늦어져도 프레임 간격이 일정하게 전달돼야 MediaPipe의 움직임 보정이 안정적.
+  //   (MediaPipe는 시각이 계속 커져야 하므로, 되감기·건너뛰기로 시간이 거꾸로 가면 그만큼 기준을 밀어서 이어 붙임)
+  let mpBase = 0, lastMpTs = -1;
+  function mpTimestamp(t) {
+    let ts = Math.round(mpBase + t * 1000);      // MediaPipe는 정수 밀리초만 안전하게 받음 (소수점 시각이 겹치면 '시각 순서 오류'로 멈춤)
+    if (ts <= lastMpTs) { mpBase += lastMpTs - ts + 33; ts = lastMpTs + 33; }
+    lastMpTs = ts;
+    return ts;
+  }
+  function analyzeFrame(t) {
+    const result = poseLandmarker.detectForVideo(video, mpTimestamp(t));
+    const pose = result.landmarks[0];   // 첫 번째 사람의 33개 점 (없으면 undefined)
+    if (live) live.t = t;
+    if (!(live && t < live.delay)) tracker.update(t, extractTrackerInput(pose));     // 카메라 '시작 전 대기' 중에는 화면에 보이기만 하고 세지 않음
+    const rp = tracker.getState().replaying;   // 이미 분석한 구간을 다시 보는 중이면 안내만 하고 세지 않음
+    if (rp !== replayShown && !exporting && !scanning && !video.paused) { replayShown = rp; setStatus(rp ? (scanDone ? "▶ 재생 중 · 분석 결과가 표시됩니다" : "⏪ 이미 분석한 구간입니다 (기록 유지 · 중복 카운트 없음)") : "▶ 분석 중...", "ready"); }
+    draw(pose);
+    refreshUI(false);
+  }
+  const HAS_RVFC = typeof video.requestVideoFrameCallback === "function";
+  if (HAS_RVFC) {
+    const onVideoFrame = (now, meta) => {
+      try {
+        if (poseLandmarker && !scanning && video.readyState >= 2) {
+          if (live) liveFrame(now, meta); else { lastTime = meta.mediaTime; analyzeFrame(meta.mediaTime); }
+        }
+      } catch (e) { console.error(e); }                    // 한 프레임에서 오류가 나도 다음 프레임부터 계속
+      video.requestVideoFrameCallback(onVideoFrame);       // 한 번만 불리므로 매번 다시 등록
+    };
+    video.requestVideoFrameCallback(onVideoFrame);
+  }
+  function loop() {
+    // requestVideoFrameCallback이 없는 브라우저용 대체 경로: 화면이 갱신될 때 영상 시간이 바뀌었으면 분석
+    if (!HAS_RVFC && poseLandmarker && !scanning && !live && video.readyState >= 2 && video.currentTime !== lastTime) {
+      lastTime = video.currentTime;
+      analyzeFrame(video.currentTime);
+    }
+    if (exporting) compositeFrame();      // 녹화 중이면 영상+그림을 한 장으로 합쳐서 녹화 캔버스에 그림
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // MediaPipe 결과(0~1 비율 좌표)를 카운터가 쓰는 '픽셀' 값으로 바꾸기
+  function extractTrackerInput(pose) {
+    const none = { footY: { R: null, L: null }, torsoPx: null, motionY: null, handXY: null, armRel: null, bodyOk: false, hipXY: null };
+    if (!pose) return none;
+    const W = canvas.width, H = canvas.height;
+    const footOk = (i) => (pose[i].visibility ?? 1) >= JUMP_CONFIG.FOOT_MIN_VISIBILITY;
+    const input = {
+      footY: {
+        R: footOk(32) ? pose[32].y * H : null,   // 오른쪽 발끝
+        L: footOk(31) ? pose[31].y * H : null,   // 왼쪽 발끝
+      },
+      torsoPx: null,
+      // 무릎(25 왼, 26 오른)·발목(27 왼, 28 오른) 위치: 달리다 멈췄는지 보는 활동량 계산용
+      motionY: {
+        kR: footOk(26) ? pose[26].y * H : null, kL: footOk(25) ? pose[25].y * H : null,
+        aR: footOk(28) ? pose[28].y * H : null, aL: footOk(27) ? pose[27].y * H : null,
+      },
+    };
+    // 손목(15 왼, 16 오른) 위치: 줄을 돌리는 손이 평소와 다르게 튀는지 보는 용도
+    input.handXY = {
+      R: footOk(16) ? [pose[16].x * W, pose[16].y * H] : null,
+      L: footOk(15) ? [pose[15].x * W, pose[15].y * H] : null,
+    };
+    // 팔·손목 관절: 손목(15 왼, 16 오른)은 같은 쪽 골반(23, 24) 기준, 팔꿈치(13, 14)는 같은 쪽 어깨(11, 12) 기준의 상대 위치.
+    // 몸 전체의 위아래 튐이 빠지고 줄 돌리는 팔·손목의 움직임만 남아서 '줄이 돌고 있는지' 판정할 수 있음
+    const relAvg = (pairs) => {
+      const v = pairs.filter(([a, b]) => footOk(a) && footOk(b)).map(([a, b]) => [(pose[a].x - pose[b].x) * W, (pose[a].y - pose[b].y) * H]);
+      return v.length ? [v.reduce((s, p) => s + p[0], 0) / v.length, v.reduce((s, p) => s + p[1], 0) / v.length] : null;
+    };
+    input.armRel = { w: relAvg([[16, 24], [15, 23]]), e: relAvg([[14, 12], [13, 11]]) };
+    input.bodyOk = [27, 28, 31, 32].every(footOk);   // 양 발목·발끝이 보이는가 (몸 전체가 안 보이면 판정하지 않음)
+    input.hipXY = [23, 24].every(i => (pose[i].visibility ?? 1) >= MIN_VISIBILITY)
+      ? [(pose[23].x + pose[24].x) / 2 * W, (pose[23].y + pose[24].y) / 2 * H] : null;   // 추적 대상이 바뀌었는지 보는 용도
+    // 몸통 길이 = 어깨 중심 ~ 골반 중심 거리 (네 점이 모두 잘 보일 때만 계산)
+    if ([11, 12, 23, 24].every(i => (pose[i].visibility ?? 1) >= MIN_VISIBILITY)) {
+      const sx = (pose[11].x + pose[12].x) / 2 * W, sy = (pose[11].y + pose[12].y) / 2 * H;
+      const hx = (pose[23].x + pose[24].x) / 2 * W, hy = (pose[23].y + pose[24].y) / 2 * H;
+      input.torsoPx = Math.hypot(sx - hx, sy - hy);
+    }
+    return input;
+  }
+
+  // ⑥ 영상 위 캔버스에 그리기
+  function draw(pose) {
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    if (pose) {
+      drawSkeleton(pose, W, H);
+      if (debugEl.checked) drawGuides(pose, W, H);
+    }
+    drawCounter(W, H);   // 횟수는 사람이 안 보여도 계속 표시
+    if (debugEl.checked) drawDebugInfo(pose, W, H);
+  }
+
+  function drawDebugInfo(pose, W, H) {
+    const { scale } = tracker.getState();
+    const fs = Math.max(14, W / 50);
+    const lines = [];
+    if (!pose) {
+      lines.push("⚠ 사람이 인식되지 않음");
+    } else {
+      lines.push(scale === null
+        ? "⚠ 몸통 길이 못 구함 (어깨·골반 4점이 다 보여야 함) → 카운트 불가"
+        : `몸통 길이 ${scale.toFixed(0)}px`);
+      const rl = tracker.ropeLatest();
+      lines.push(rl ? `줄 돌림 ${rl.on ? "ON" : "OFF"} (손목·팔꿈치 박자 ${rl.r === null ? "-" : rl.r.toFixed(2)} / 기준 ${JUMP_CONFIG.ROPE_ON_RATIO})` : "줄 돌림 판정 대기 중…");
+      for (const [name, key, idx] of [["R", "R", 32], ["L", "L", 31]]) {
+        const f = tracker.feet[key];
+        const vis = pose[idx].visibility ?? 1;
+        const seen = vis >= JUMP_CONFIG.FOOT_MIN_VISIBILITY;
+        const state = !seen ? "발끝 안 보임" : (f.airborne ? "공중" : "지상");
+        lines.push(`${name} 발끝 신뢰도 ${vis.toFixed(2)} · 높이 ${f.lift.toFixed(2)} / 기준 ${(f.startEff ?? JUMP_CONFIG.LIFT_START_RATIO).toFixed(2)} · ${state}`);
+      }
+    }
+    ctx.font = `${fs}px ui-monospace, Menlo, Consolas, monospace`;
+    ctx.textBaseline = "top";
+    const lineH = fs * 1.4;
+    const boxW = Math.max(...lines.map(s => ctx.measureText(s).width)) + fs;
+    const boxH = lineH * lines.length + fs * 0.6;
+    const x = W / 60, y = H - boxH - H / 12;       // 영상 컨트롤바 위쪽에 표시
+    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.fillRect(x, y, boxW, boxH);
+    ctx.fillStyle = "#e2e8f0";
+    lines.forEach((s, i) => ctx.fillText(s, x + fs * 0.5, y + fs * 0.3 + i * lineH));
+  }
+
+  function drawSkeleton(pose, W, H) {
+    const lineWidth = Math.max(3, W / 250);
+    const dotRadius = Math.max(5, W / 130);
+    const visible = (i) => (pose[i].visibility ?? 1) >= MIN_VISIBILITY;
+
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = "round";
+    ctx.setLineDash([]);
+    for (const [a, b] of LINES) {
+      if (!visible(a) || !visible(b)) continue;
+      if (LEFT_POINTS.includes(a) && LEFT_POINTS.includes(b))        ctx.strokeStyle = "#34d399";
+      else if (RIGHT_POINTS.includes(a) && RIGHT_POINTS.includes(b)) ctx.strokeStyle = "#fb923c";
+      else                                                            ctx.strokeStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.moveTo(pose[a].x * W, pose[a].y * H);
+      ctx.lineTo(pose[b].x * W, pose[b].y * H);
+      ctx.stroke();
+    }
+    const dot = (i, color) => {
+      if (!visible(i)) return;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(pose[i].x * W, pose[i].y * H, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    LEFT_POINTS.forEach(i  => dot(i, "#10b981"));
+    RIGHT_POINTS.forEach(i => dot(i, "#f97316"));
+
+    // 공중에 떠 있는 발끝은 노란색으로 크게 강조
+    for (const [key, idx] of [["L", 31], ["R", 32]]) {
+      if (!tracker.feet[key].airborne) continue;
+      ctx.fillStyle = "#facc15"; ctx.beginPath();
+      ctx.arc(pose[idx].x * W, pose[idx].y * H, dotRadius * 1.8, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // 발마다: 파란 점선(그 발의 가장 낮은 지점) + 노란 점선(점프 시작 높이) — 발 주변에 짧게 그림
+  function drawGuides(pose, W, H) {
+    const { scale } = tracker.getState();
+    if (scale === null) return;
+    ctx.lineWidth = Math.max(2, W / 400);
+    ctx.setLineDash([W / 140, W / 200]);
+    for (const [key, idx] of [["R", 32], ["L", 31]]) {
+      const f = tracker.feet[key];
+      if (f.groundY === null || f.smoothY === null) continue;
+      const cx = pose[idx].x * W, half = scale * 0.7;
+      const startY = f.groundY - (f.startEff ?? JUMP_CONFIG.LIFT_START_RATIO) * scale;
+      ctx.strokeStyle = "#38bdf8";
+      ctx.beginPath(); ctx.moveTo(cx - half, f.groundY); ctx.lineTo(cx + half, f.groundY); ctx.stroke();
+      ctx.strokeStyle = "#facc15";
+      ctx.beginPath(); ctx.moveTo(cx - half, startY);    ctx.lineTo(cx + half, startY);    ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  // 영상 위 표시: 좌측 상단 R/L 카운트 + 제외 + 속도 + 미스/연속 스텝 + 줄 돌림 / 위쪽 진행선 · 가운데 상태("카운팅 중") · 오른쪽 구간 배지 / 미스 직후 빨간 경고
+  const SECTION_COLORS = ["#3b82f6", "#22c55e", "#f97316", "#a855f7"], SECTION_TEXT = ["#ffffff", "#0b0b0b", "#0b0b0b", "#ffffff"];
+  function drawCounter(W, H) {
+    const pad = W / 60;
+    const big = Math.max(24, W / (document.body.classList.contains("bigview") ? 10 : 16));   // 크게 보기에서는 멀리서도 보이게 더 크게
+    const small = big * 0.42;
+    const two = (n) => String(n).padStart(2, "0");
+    const info = getMissInfo(), t = curT();
+    const rate = stepRate(info.counted, t, 10);
+    const s = info.session, st = sessionState(s, t);
+    const boxW = big * 4.6, boxH = big * 4.95;
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(pad, pad, boxW, boxH);
+    ctx.textBaseline = "top";
+    ctx.font = `bold ${big}px ui-monospace, Menlo, Consolas, monospace`;
+    ctx.fillStyle = "#fb923c";
+    // 영상 위 카운터는 '지금 재생 위치까지'의 값 (되감아 볼 때도 그 시점의 기록이 나오도록). 재생 중에는 곧 최신 값과 같음
+    let nR = 0, nL = 0;
+    for (const e of info.counted) { if (e.t > t) break; if (e.foot === "R") nR++; else nL++; }
+    ctx.fillText(`R: ${two(nR)}`, pad * 2, pad * 1.6);
+    ctx.fillStyle = "#34d399";
+    ctx.fillText(`L: ${two(nL)}`, pad * 2, pad * 1.6 + big * 1.15);
+
+    ctx.font = `${small}px ui-monospace, Menlo, Consolas, monospace`;
+    ctx.fillStyle = "#cbd5e1";
+    const y0 = pad * 1.6 + big * 2.35;
+    ctx.fillText(`제외 ${info.skipped + info.exNorope + info.exMiss + info.exOut + info.exDup} · 보충 +${info.inferred.length}`, pad * 2, y0);
+    ctx.fillText(`속도 ${rate === null ? "-" : rate.toFixed(1)} 스텝/초`, pad * 2, y0 + small * 1.35);
+    ctx.fillText(`미스 ${info.misses.filter(m => m.detectT <= t).length} · 연속 ${info.current}스텝`, pad * 2, y0 + small * 2.7);
+    const on = tracker.ropeOnAt(t);
+    ctx.fillStyle = on === null ? "#94a3b8" : on ? "#34d399" : "#fca5a5";
+    ctx.fillText(on === null ? "줄 돌림 판정 대기" : on ? "● 줄 돌리는 중" : "○ 줄 정지", pad * 2, y0 + small * 4.05);
+
+    // 측정 진행선(위) · 상태 칩(가운데) · 구간 배지(오른쪽)
+    if (s.start !== null && s.end !== null) {
+      const frac = Math.max(0, Math.min(1, (t - s.start) / (s.end - s.start))), bh = Math.max(4, W / 150);
+      ctx.fillStyle = "rgba(255,255,255,0.25)"; ctx.fillRect(0, 0, W, bh);
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W * frac, bh);
+    }
+    const chip = (text, x, y, bg, fg, dot) => {
+      const fs = big * 0.5; ctx.font = `bold ${fs}px system-ui, sans-serif`;
+      const w = ctx.measureText(text).width + fs * (dot ? 2.2 : 1.2), h = fs * 1.7;
+      ctx.fillStyle = bg; ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x - w / 2, y, w, h, h / 2); else ctx.rect(x - w / 2, y, w, h); ctx.fill();
+      if (dot) { ctx.fillStyle = dot; ctx.beginPath(); ctx.arc(x - w / 2 + fs * 0.9, y + h / 2, fs * 0.28, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillStyle = fg; ctx.textAlign = "left"; ctx.fillText(text, x - w / 2 + fs * (dot ? 1.5 : 0.6), y + fs * 0.35);
+    };
+    const secIdx = s.start === null ? -1 : Math.max(0, Math.floor((Math.min(t, s.end ?? t) - s.start) / SECTION_SEC + 1e-9));
+    if (st === "running") {
+      chip("카운팅 중", W / 2, pad * 1.4, "rgba(0,0,0,0.65)", "#ffffff", "#ef4444");
+      const k = secIdx % SECTION_COLORS.length; chip(`${secIdx + 1}구간`, W - pad - big * 1.1, pad * 1.4, SECTION_COLORS[k], SECTION_TEXT[k]);
+    } else if (st === "ended") {
+      chip("측정 종료", W / 2, pad * 1.4, "rgba(0,0,0,0.65)", "#ffffff");
+    } else {
+      chip("측정 전", W / 2, pad * 1.4, "rgba(0,0,0,0.5)", "#cbd5e1");
+    }
+    ctx.textAlign = "left";
+
+    // 미스가 알아채진 직후 1.2초 동안 빨간 경고 (분석 영상에도 그대로 들어감)
+    if (info.misses.some(m => t - m.detectT >= 0 && t - m.detectT < 1.2)) {
+      const fh = big * 0.95;
+      ctx.fillStyle = "#d03b3b";
+      ctx.fillRect(pad, pad + boxH + pad * 0.6, big * 2.9, fh);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `bold ${big * 0.62}px system-ui, sans-serif`;
+      ctx.fillText("⚠ 미스", pad + big * 0.35, pad + boxH + pad * 0.6 + fh * 0.2);
+    }
+  }
+
+  // ═══════════ 실시간 결과 · 리듬 분석 화면 갱신 ═══════════
+  const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : v.toFixed(d);
+  const COLORS = (() => {
+    const cs = getComputedStyle(document.documentElement), g = (n) => cs.getPropertyValue(n).trim();
+    return { r: g("--series-r"), l: g("--series-l"), speed: g("--series-speed"), hand: g("--series-hand"), surface: g("--surface-1"),
+             crit: g("--status-critical"), grid: g("--grid"), axis: g("--axis"), muted: g("--text-muted"), text2: g("--text-secondary"), text: g("--text-primary") };
+  })();
+
+  let lastUI = 0, lastTableN = "", lastMisses = [];
+  // 리듬 지표는 원본(보충하지 않은) 스텝으로, 속도는 보충까지 포함한 카운트로 계산 (보충하면 교차 비율이 인위적으로 100%가 되므로)
+  function rhythmOf(mi) { const a = analyzeRhythm(mi.ok), b = analyzeRhythm(mi.counted); a.avgRate = b.avgRate; a.maxRate = b.maxRate; return a; }
+
+  function renderSession(mi, t) {
+    const s = mi.session, st = sessionState(s, t), el = $("sessState");
+    const secs = mi.sections, f1 = (v) => v.toFixed(1);
+    if (s.start === null) el.innerHTML = "측정 전 — 줄을 돌리기 시작하면 자동으로 시작합니다";
+    else if (st === "before") el.innerHTML = `측정 전 · <b>${f1(s.start)}초</b>에 시작${s.startManual ? " (직접 지정)" : ""}`;
+    else if (st === "running") el.innerHTML = `<b>● 카운팅 중</b> · ${f1(t - s.start)}초${s.end !== null ? " / " + f1(s.end - s.start) + "초" : ""}${s.startManual ? " (시작 직접 지정)" : ""}`;
+    else el.innerHTML = `<b>■ 측정 종료</b> · ${f1(s.start)}~${f1(s.end)}초 (${f1(s.end - s.start)}초)${s.endManual ? " · 강제 종료" : ""}`;
+    let tr = 0, tl = 0, tm = 0;
+    $("secBody").innerHTML = secs.map(x => {
+      tr += x.R; tl += x.L; tm += x.miss;
+      const el2 = Math.max(0, Math.min(t, x.b) - x.a), rate = el2 > 0.5 ? (x.R + x.L) / el2 : null, reached = t >= x.a;
+      const k = x.i % SECTION_COLORS.length;
+      return `<tr><td><span class="secdot" style="background:${SECTION_COLORS[k]}"></span>${x.rel[0]}~${x.rel[1]}s</td><td class="${reached ? "" : "dim"}">${reached ? x.R : "—"}</td><td class="${reached ? "" : "dim"}">${reached ? x.L : "—"}</td><td class="${reached ? "" : "dim"}">${reached ? x.miss : "—"}</td><td class="${reached ? "" : "dim"}">${rate === null ? "—" : rate.toFixed(1)}</td></tr>`;
+    }).join("") || '<tr><td colspan="5" class="dim">아직 측정 구간이 없습니다</td></tr>';
+    const spanT = s.start === null ? 0 : Math.max(0, Math.min(t, s.end ?? t) - s.start);
+    $("secFoot").innerHTML = secs.length ? `<tr><td>합계</td><td>${tr}</td><td>${tl}</td><td>${tm}</td><td>${spanT > 0.5 ? ((tr + tl) / spanT).toFixed(1) : "—"}</td></tr>` : "";
+  }
+
+  function refreshUI(force) {
+    const now = performance.now();
+    if (!force && now - lastUI < 150) return;      // 화면 갱신은 초당 약 6회로 제한
+    lastUI = now;
+
+    const mi = getMissInfo(), t = curT();
+    lastMisses = mi.listed;
+    $("tR").textContent = mi.R; $("tL").textContent = mi.L;
+    $("tSum").textContent = mi.R + mi.L;
+    $("tSkip").textContent = `제외 ${mi.skipped + mi.exNorope + mi.exMiss + mi.exOut + mi.exDup} · 보충 +${mi.inferred.length}`;
+    const rate = stepRate(mi.counted, t, 10);
+    $("tRate").textContent = rate === null ? "—" : rate.toFixed(1);
+    $("tRateMin").textContent = rate === null ? "—" : Math.round(rate * 60);
+
+    const on = tracker.ropeOnAt(t), rl = tracker.ropeLatest();
+    $("tRope").textContent = on === null ? "판정 대기" : on ? "● 줄 돌리는 중" : "○ 줄 정지";
+    $("tRopeSub").textContent = rl && rl.r !== null ? `손목·팔꿈치 박자 ${rl.r.toFixed(2)} (기준 ${JUMP_CONFIG.ROPE_ON_RATIO})` : "";
+
+    $("tMiss").textContent = mi.total;
+    $("tMissSub").textContent = `확실 ${mi.high} · 의심 ${mi.low} · 수동 ${mi.manual}`;
+    $("tCur").textContent = mi.current; $("tBest").textContent = mi.best;
+    markBtn.textContent = `✕ 미스 (${mi.total}) · M`;
+    renderMissList(mi);
+    renderSession(mi, Math.max(0, tracker.getState().analyzedUntil));      // 구간 카드는 분석이 진행된 시점 기준(되감아 봐도 값이 안정적)
+
+    csvBtn.disabled = tracker.events.length === 0;
+    renderMetrics(rhythmOf(mi));
+    drawLane(); drawSpeed();
+    renderTable();
+    renderPerf(getPerf(mi, force));
+  }
+
+  // ═══════════ 경기력 분석 화면 ═══════════
+  let perfAt = 0, perfKey = "", perfVal = null;
+  function getPerf(mi, force) {
+    const tNow = Math.max(0, tracker.getState().analyzedUntil);
+    const key = [mi.counted.length, mi.listed.map(m => m.key + m.conf + m.counted).join(), mi.session.start, mi.session.end, tracker.armTrack.length].join("|");
+    if (key === perfKey) return perfVal;
+    const now = performance.now();
+    if (!force && perfVal && now - perfAt < 1000) return perfVal;        // 분석 중에는 1초에 한 번만 다시 계산
+    perfAt = now; perfKey = key;
+    perfVal = performanceReport(mi, tracker.armTrack, tNow);
+    return perfVal;
+  }
+  const pctTxt = (v) => v === null || v === undefined ? "—" : Math.round(v * 100) + "%";
+  let lastPerfSig = "";
+  function renderPerf(rep) {
+    $("perfEmpty").hidden = !!rep; $("perfBody").hidden = !rep;
+    syncRep = rep;
+    drawSync();
+    if (!rep) { lastPerfSig = ""; return; }
+    const sig = JSON.stringify([rep.tips, rep.overall, rep.missDetails.map(d => [d.m.key, d.m.conf, d.m.counted, d.flags, d.recover]), rep.sections.map(s => [s.R, s.L, s.miss, s.pace, s.cv, s.lift, s.sync])]);
+    if (sig === lastPerfSig) return;
+    lastPerfSig = sig;
+    const o = rep.overall, md = rep.missDetails.filter(d => d.m.counted);
+    const lostT = md.reduce((a, d) => a + (d.recover || 0), 0), lostN = Math.round(md.reduce((a, d) => a + (d.lost || 0), 0));
+    const items = [
+      ["뛰는 동안 속도", o.cycleRate === null ? "—" : o.cycleRate.toFixed(1) + " 스텝/초", "실수 구간을 뺀 속도 (같은 발 주기 기준)"],
+      ["후반 속도 유지율", pctTxt(o.fade), o.fade === null ? "10초 구간이 2개 이상일 때" : "마지막 구간 ÷ 첫 구간 (뛰는 동안 속도)"],
+      ["손·발 박자 동기", pctTxt(o.syncPct), rep.lock === null ? "손목 박자를 판단할 수 없음" : "손 박자가 발 스텝의 " + (rep.lock === 0.5 ? "1/2" : "1") + "배로 맞물린 시간 (실수 구간 제외)"],
+      ["박자 변동", pctTxt(o.cv), "같은 발 주기의 흔들림 · 작을수록 일정"],
+      ["실수로 잃은 시간", md.length ? lostT.toFixed(1) + "초" : "—", md.length ? "약 " + lostN + "스텝 (다시 줄을 돌리기까지)" : "실수 없음"],
+      ["발 높이 R / L", o.liftR === null || o.liftL === null ? "—" : o.liftR.toFixed(2) + " / " + o.liftL.toFixed(2), "몸통 대비 · 카메라 각도 영향을 받음"],
+    ];
+    $("perfMetrics").innerHTML = items.map(([l, v, s]) => `<div class="metric"><div class="label">${l}</div><div class="value">${v}</div><div class="sub">${s}</div></div>`).join("");
+    $("perfTips").innerHTML = rep.tips.map(t => `<li>${t.text}</li>`).join("");
+    const f1 = (v, d = 1) => v === null || v === undefined ? "—" : v.toFixed(d);
+    $("perfMiss").innerHTML = rep.missDetails.length ? rep.missDetails.map((d, i) => {
+      const b = rep.base, p = d.pre;
+      return `<div class="pmiss"><div class="top"><span class="conf ${d.m.conf === "low" ? "low" : "high"}">${confText(d.m)}</span>${d.m.t.toFixed(2)}초 · 측정 ${d.at.toFixed(1)}초째${d.m.counted ? "" : " · 개수에서 제외"}
+        <button class="btn small" data-t="${d.m.t}">▶ 이동</button></div>
+        <div>근거: ${missEvidence(d.m)}${d.recover !== null ? ` · 다시 줄을 돌리기까지 <b>${d.recover.toFixed(1)}초</b> (약 ${Math.round(d.lost)}스텝 손실)` : ""}</div>
+        ${d.flags.length ? "<ul>" + d.flags.map(f => `<li>${f.text}</li>`).join("") + "</ul>" : "<div>직전 2초: 평소와 뚜렷한 차이 없음 (순간적으로 걸림)</div>"}
+        <div class="stats">직전 2초 — 속도 ${f1(p.rate)} (평소 ${f1(b.rate && b.rate.m)}) · 박자 변동 ${pctTxt(p.cv)} (평소 ${pctTxt(b.cv && b.cv.m)}) · 발 높이 ${pctTxt(p.lift)} · 손:발 ${f1(p.ratio, 2)}</div></div>`;
+    }).join("") : '<div class="missempty">측정 구간에 실수가 없습니다.</div>';
+    $("perfSecBody").innerHTML = rep.sections.map(s => `<tr><td>${s.rel[0]}~${s.rel[1]}s</td><td>${s.avgRate.toFixed(1)}</td><td>${f1(s.pace)}</td><td>${pctTxt(s.cv)}</td><td>${s.lift === null ? "—" : Math.round(s.lift * 100)}</td><td>${pctTxt(s.sync)}</td><td>${s.miss}</td></tr>`).join("");
+  }
+  $("perfMiss").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b || live || !video.src) return;
+    video.currentTime = Math.max(0, parseFloat(b.dataset.t) - 1);
+  });
+
+  // ───── 손·발 박자 그래프 ─────
+  let syncRep = null, syncHover = null;
+  function drawSync() {
+    const cv = $("syncChart");
+    if (!syncRep || !cv.clientWidth) return;
+    const { c, w, h } = setupCanvas(cv);
+    const L = 34, Rm = 12, T = 10, B = 22, pw = w - L - Rm, ph = h - T - B, dur = chartDuration();
+    const pts = syncRep.series, lock = syncRep.lock;
+    // 손 박자를 발 박자 단위로 환산: 그 순간 1/2배·1배 중 맞물린 쪽으로 나눔 (어긋난 순간은 이 선수의 평소 배수로)
+    const handV = (p) => p.hand === null || !lock ? null : p.hand / (p.ratio !== null && Math.abs(lockOff(p.ratio)) <= 0.25 ? nearestLock(p.ratio) : lock);
+    const footMax = Math.max(0, ...pts.map(p => p.rate || 0));
+    const yMaxRaw = Math.max(8, footMax * 1.5);
+    const ystep = niceStep(yMaxRaw, 4), yMax = Math.ceil(yMaxRaw / ystep) * ystep;
+    const x = (t) => L + (Math.min(t, dur) / dur) * pw, y = (v) => T + ph - (Math.min(v, yMax) / yMax) * ph;
+    vGrid(c, x, T, h, B, dur, pw, L);
+    c.font = "11px system-ui, sans-serif"; c.textAlign = "right";
+    for (let v = 0; v <= yMax + 1e-9; v += ystep) {
+      c.strokeStyle = v === 0 ? COLORS.axis : COLORS.grid; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(L, Math.round(y(v)) + 0.5); c.lineTo(L + pw, Math.round(y(v)) + 0.5); c.stroke();
+      c.fillStyle = COLORS.muted; c.fillText(+v.toFixed(1), L - 6, y(v) + 4);
+    }
+    c.fillStyle = "rgba(208, 59, 59, 0.22)";                          // 손·발 박자가 어긋난 구간
+    for (const p of pts) if (p.sync === false) c.fillRect(x(p.t - PERF_HOP / 2), T, Math.max(1, x(p.t + PERF_HOP / 2) - x(p.t - PERF_HOP / 2)), ph);
+    for (const m of lastMisses) {
+      c.strokeStyle = COLORS.crit; c.lineWidth = 1; c.setLineDash(m.conf === "low" ? [3, 3] : []);
+      c.beginPath(); c.moveTo(Math.round(x(m.t)) + 0.5, T); c.lineTo(Math.round(x(m.t)) + 0.5, T + ph); c.stroke(); c.setLineDash([]);
+    }
+    const line = (get, col) => {
+      c.strokeStyle = col; c.lineWidth = 2; c.lineJoin = "round"; c.lineCap = "round";
+      let on = false; c.beginPath();
+      for (const p of pts) { const v = get(p); if (v === null) { on = false; continue; } if (!on) { c.moveTo(x(p.t), y(v)); on = true; } else c.lineTo(x(p.t), y(v)); }
+      c.stroke();
+    };
+    line(handV, COLORS.hand);
+    line((p) => p.rate, COLORS.speed);
+    if (syncHover !== null && pts[syncHover]) {
+      const p = pts[syncHover];
+      c.strokeStyle = COLORS.text2; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(Math.round(x(p.t)) + 0.5, T); c.lineTo(Math.round(x(p.t)) + 0.5, T + ph); c.stroke();
+      for (const [v, col] of [[p.rate, COLORS.speed], [handV(p), COLORS.hand]]) if (v !== null) {
+        c.fillStyle = COLORS.surface; c.beginPath(); c.arc(x(p.t), y(v), 6, 0, Math.PI * 2); c.fill();
+        c.fillStyle = col; c.beginPath(); c.arc(x(p.t), y(v), 4, 0, Math.PI * 2); c.fill();
+      }
+    }
+    cv._geo = { L, pw, dur, x, y, handV };
+  }
+  const syncCv = $("syncChart"), syncTip = $("syncTip");
+  syncCv.addEventListener("pointerdown", (ev) => { if (ev.pointerType !== "mouse") syncCv.dispatchEvent(new MouseEvent("mousemove", { clientX: ev.clientX, clientY: ev.clientY })); });   // 터치: 누른 곳의 값 보기
+  syncCv.addEventListener("mousemove", (ev) => {
+    const g = syncCv._geo; if (!g || !syncRep || !syncRep.series.length) return;
+    const r = syncCv.getBoundingClientRect(), t = ((ev.clientX - r.left - g.L) / g.pw) * g.dur;
+    let bi = 0, bd = Infinity;
+    syncRep.series.forEach((p, i) => { const d = Math.abs(p.t - t); if (d < bd) { bd = d; bi = i; } });
+    if (bd > 1) { syncHover = null; syncTip.style.display = "none"; drawSync(); return; }
+    syncHover = bi; drawSync();
+    const p = syncRep.series[bi], hv = g.handV(p);
+    syncTip.textContent = `${p.t.toFixed(1)}초 · 발 ${p.rate === null ? "—" : p.rate.toFixed(1) + " 스텝/초"} · 손 ${p.hand === null ? "—" : p.hand.toFixed(1) + "회/초"}${hv !== null ? " (환산 " + hv.toFixed(1) + ")" : ""} · ${p.sync === null ? "판단 불가" : p.sync ? "박자 맞음" : "박자 어긋남"}`;
+    syncTip.style.display = "block";
+    syncTip.style.left = Math.min(Math.max(g.x(p.t) - 80, 0), r.width - syncTip.offsetWidth) + "px";
+    syncTip.style.top = "6px";
+  });
+  syncCv.addEventListener("mouseleave", () => { syncHover = null; syncTip.style.display = "none"; drawSync(); });
+
+  function renderMetrics(a) {
+    const items = [
+      ["교차 비율", a.alternation === null ? "—" : Math.round(a.alternation * 100) + "%", "다음 스텝이 반대 발인 비율. 번갈아 뛰면 100%에 가깝습니다."],
+      ["리듬 일정도", a.score === null ? "—" : Math.round(a.score) + "점", "같은 발 주기의 균일함(100 − 변동계수%). 30fps 영상은 프레임(0.033초) 단위로만 시간을 알 수 있어 실제보다 낮게 나올 수 있어요."],
+      ["같은 발 주기", a.cycleMean === null ? "—" : fmt(a.cycleMean, 2) + "초", a.cycleSd === null ? "" : "± " + fmt(a.cycleSd, 2) + "초"],
+      ["좌우 간격", a.rl === null || a.lr === null ? "—" : `${fmt(a.rl, 2)} / ${fmt(a.lr, 2)}초`, "R→L / L→R 간격"],
+      ["좌우 균형", a.balance === null ? "—" : Math.round(a.balance * 100) + "%", "두 간격이 같을수록 100%"],
+      ["평균 속도", a.avgRate === null ? "—" : fmt(a.avgRate, 1) + " 스텝/초", a.avgRate === null ? "" : Math.round(a.avgRate * 60) + " 스텝/분 (첫 스텝~마지막 스텝)"],
+      ["최고 속도", a.maxRate === null ? "—" : fmt(a.maxRate, 1) + " 스텝/초", "3초 평균 기준"],
+    ];
+    const box = $("metrics");
+    if (box.children.length !== items.length) {
+      box.innerHTML = items.map(() => `<div class="metric"><div class="label"></div><div class="value"></div><div class="sub"></div></div>`).join("");
+    }
+    items.forEach(([label, value, sub], i) => {
+      const el = box.children[i];
+      el.querySelector(".label").textContent = label;
+      el.querySelector(".value").textContent = value;
+      el.querySelector(".sub").textContent = sub;
+    });
+  }
+
+  function renderTable() {
+    const det = $("tableDetails"), mi = getMissInfo(), ev = allRows(mi);
+    det.querySelector("summary").textContent = `표로 보기 (스텝 기록 ${mi.all.length}개 · 카운트 ${mi.counted.length}개 · 보충 ${mi.inferred.length}개)`;
+    const sig = ev.length + ":" + mi.counted.length;
+    if (!det.open || sig === lastTableN) return;
+    lastTableN = sig;
+    $("tableBody").innerHTML = ev.map((e, i) =>
+      `<tr><td>${i + 1}</td><td>${e.foot}</td><td>${e.t.toFixed(2)}</td><td>${e.inferred ? "—" : e.airtime.toFixed(2)}</td><td>${e.inferred ? "—" : e.peak.toFixed(2)}</td><td>${verdictText(e)}</td></tr>`).join("");
+  }
+  $("tableDetails").addEventListener("toggle", () => { lastTableN = ""; renderTable(); });
+
+  // ───── 차트 공통 ─────
+  const laneCv = $("laneChart"), speedCv = $("speedChart");
+  function setupCanvas(cv) {
+    const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    }
+    const c = cv.getContext("2d");
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, w, h);
+    return { c, w, h };
+  }
+  function niceStep(range, targetTicks) {
+    const raw = range / targetTicks, pow = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / pow;
+    return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * pow;
+  }
+  const chartDuration = () => live ? Math.max(10, live.t + 0.5) : (Number.isFinite(video.duration) && video.duration > 0) ? video.duration : (liveDur || 10);
+  const fmtT = (t) => (t >= 60 ? `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, "0")}` : `${+t.toFixed(1)}초`);
+  function roundedBar(c, x, y, w, h, r) {
+    c.beginPath();
+    if (c.roundRect) c.roundRect(x, y, w, h, r); else c.rect(x, y, w, h);
+    c.fill();
+  }
+  function vGrid(c, x, T, h, B, dur, pw, L) {
+    const step = niceStep(dur, 6);
+    c.font = "11px system-ui, sans-serif"; c.textAlign = "center";
+    for (let t = 0; t <= dur + 1e-6; t += step) {
+      const gx = x(t);
+      c.strokeStyle = COLORS.grid; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(gx + 0.5, T); c.lineTo(gx + 0.5, h - B); c.stroke();
+      c.fillStyle = COLORS.muted; c.fillText(fmtT(t), Math.min(Math.max(gx, L + 6), L + pw - 6), h - 6);
+    }
+  }
+  function playhead(c, gx, T, h, B) {
+    c.strokeStyle = COLORS.text2; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(Math.round(gx) + 0.5, T); c.lineTo(Math.round(gx) + 0.5, h - B); c.stroke();
+  }
+
+  // ───── 좌우 스텝 타임라인 ─────
+  let laneHits = [], missHits = [];
+  function drawLane() {
+    const { c, w, h } = setupCanvas(laneCv);
+    const L = 34, Rm = 10, T = 16, B = 22, pw = w - L - Rm, dur = chartDuration();
+    const x = (t) => L + (Math.min(t, dur) / dur) * pw;
+    vGrid(c, x, T, h, B, dur, pw, L);
+
+    const span = tracker.ropeSpan();                        // 줄이 안 돌던 구간: 회색 띠
+    if (span) {
+      const segs = []; let p = Math.max(0, span[0] - 0.4); const endT = span[1] + 0.4;
+      for (const r of tracker.ropeIntervals()) { if (r.a > p) segs.push([p, Math.min(r.a, endT)]); p = Math.max(p, r.b === Infinity ? endT : r.b); }
+      if (p < endT) segs.push([p, endT]);
+      c.fillStyle = COLORS.axis; c.globalAlpha = 0.7;
+      for (const [a, b] of segs) c.fillRect(x(a), T, Math.max(1, x(b) - x(a)), h - T - B);
+      c.globalAlpha = 1;
+    }
+
+    const laneY = { R: T + (h - T - B) * 0.27, L: T + (h - T - B) * 0.73 };
+    for (const foot of ["R", "L"]) {                       // 차선(가로 기준선)과 이름표
+      c.strokeStyle = COLORS.axis; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(L, laneY[foot] + 0.5); c.lineTo(L + pw, laneY[foot] + 0.5); c.stroke();
+      c.fillStyle = foot === "R" ? COLORS.r : COLORS.l;
+      c.beginPath(); c.arc(8, laneY[foot], 4, 0, Math.PI * 2); c.fill();
+      c.fillStyle = COLORS.text2; c.font = "12px system-ui, sans-serif"; c.textAlign = "left";
+      c.fillText(foot, 18, laneY[foot] + 4);
+    }
+    laneHits = [];
+    const mi0 = getMissInfo();
+    allRows(mi0).forEach((e, i) => {
+      const gx = x(e.t), cy = laneY[e.foot], col = e.foot === "R" ? COLORS.r : COLORS.l;
+      if (e.status === "ok" && !e.inferred) { c.fillStyle = col; roundedBar(c, gx - 1.5, cy - 13, 3, 26, 1.5); }   // 얇은 막대 하나 = 착지 1회
+      else if (e.inferred) { c.fillStyle = col; c.globalAlpha = 0.45; roundedBar(c, gx - 1.5, cy - 13, 3, 26, 1.5); c.globalAlpha = 1; }   // 연한 막대 = 놓친 스텝을 보충한 것
+      else { c.strokeStyle = col; c.lineWidth = 1.2; c.strokeRect(gx - 1.5, cy - 13, 3, 26); }      // 속이 빈 막대 = 카운트에서 제외
+      laneHits.push({ gx, cy, e, i });
+    });
+    missHits = [];                                          // 실수: 빨간 세로선 + 위쪽 ▼ 아이콘 (색만으로 구분하지 않음)
+    lastMisses.forEach((m, i) => {
+      const gx = x(m.t);
+      const low = m.conf === "low";
+      c.strokeStyle = COLORS.crit; c.lineWidth = 1.5; c.setLineDash(low ? [3, 3] : []);
+      c.beginPath(); c.moveTo(gx, T - 2); c.lineTo(gx, h - B); c.stroke(); c.setLineDash([]);
+      c.beginPath(); c.moveTo(gx - 6, 1); c.lineTo(gx + 6, 1); c.lineTo(gx, 12); c.closePath();
+      if (low) { c.fillStyle = COLORS.surface; c.fill(); c.strokeStyle = COLORS.crit; c.lineWidth = 1.2; c.stroke(); } else { c.fillStyle = COLORS.crit; c.fill(); }
+      missHits.push({ gx, m, i });
+    });
+    const ses = mi0.session;                                 // 측정 시작·종료선
+    if (ses.start !== null) {
+      c.font = "11px system-ui, sans-serif"; c.textAlign = "left"; c.lineWidth = 1;
+      for (const [tt, label] of [[ses.start, "시작"], [ses.end, "종료"]]) {
+        if (tt === null || tt > dur) continue;
+        const gx = Math.round(x(tt)) + 0.5;
+        c.strokeStyle = COLORS.text2; c.beginPath(); c.moveTo(gx, T); c.lineTo(gx, h - B); c.stroke();
+        c.fillStyle = COLORS.text2; c.fillText(label, gx + 3, T + 10);
+      }
+    }
+    playhead(c, x(curT()), T, h, B);
+  }
+  const laneTip = $("laneTip");
+  laneCv.addEventListener("pointerdown", (ev) => { if (ev.pointerType !== "mouse") laneCv.dispatchEvent(new MouseEvent("mousemove", { clientX: ev.clientX, clientY: ev.clientY })); });   // 터치: 누른 곳의 값 보기
+  laneCv.addEventListener("mousemove", (ev) => {
+    const r = laneCv.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    const mh = missHits.find(k => Math.abs(k.gx - mx) < 7);
+    laneCv.style.cursor = mh ? "pointer" : "default";
+    if (mh) {
+      laneTip.textContent = `실수 ${mh.i + 1} · ${mh.m.t.toFixed(2)}초 · ${missKind(mh.m)} (누르면 1초 전 장면으로 이동)`;
+      laneTip.style.display = "block";
+      laneTip.style.left = Math.min(Math.max(mh.gx - 20, 0), r.width - laneTip.offsetWidth) + "px";
+      laneTip.style.top = "20px";
+      return;
+    }
+    let best = null, bd = 9;
+    for (const hit of laneHits) { const d = Math.hypot(hit.gx - mx, (hit.cy - my) * 0.4); if (d < bd) { bd = d; best = hit; } }
+    if (!best) { laneTip.style.display = "none"; return; }
+    const e = best.e;
+    laneTip.textContent = e.inferred ? `${best.i + 1}번째 · ${e.foot} · ${e.t.toFixed(2)}초 · ${verdictText(e)} (놓친 스텝을 번갈아 뛰는 패턴으로 보충)`
+      : `${best.i + 1}번째 · ${e.foot} · ${e.t.toFixed(2)}초 · 체공 ${e.airtime.toFixed(2)}초 · 높이 ${e.peak.toFixed(2)}${e.status === "ok" ? "" : " · " + verdictText(e)}`;
+    laneTip.style.display = "block";
+    laneTip.style.left = Math.min(Math.max(best.gx - 20, 0), r.width - laneTip.offsetWidth) + "px";
+    laneTip.style.top = Math.max(best.cy - 48, 0) + "px";
+  });
+  laneCv.addEventListener("mouseleave", () => { laneTip.style.display = "none"; });
+  laneCv.addEventListener("click", (ev) => {
+    const mx = ev.clientX - laneCv.getBoundingClientRect().left;
+    const mh = missHits.find(k => Math.abs(k.gx - mx) < 7);
+    if (mh && !live && video.src) video.currentTime = Math.max(0, mh.m.t - 1);
+  });
+
+  // ───── 스텝 속도 그래프 ─────
+  let speedPts = [], speedHover = null;
+  function drawSpeed() {
+    const { c, w, h } = setupCanvas(speedCv);
+    const L = 34, Rm = 12, T = 10, B = 22, pw = w - L - Rm, ph = h - T - B, dur = chartDuration();
+    const nowT = Math.min(curT(), dur);
+    const pts = speedSeries(getMissInfo().counted, nowT, 3, 0.25);
+    speedPts = pts;
+    const yMaxRaw = Math.max(2, ...pts.map(p => p.v));
+    const ystep = niceStep(yMaxRaw, 3), yMax = Math.ceil(yMaxRaw / ystep) * ystep;
+    const x = (t) => L + (t / dur) * pw, y = (v) => T + ph - (v / yMax) * ph;
+
+    vGrid(c, x, T, h, B, dur, pw, L);
+    c.font = "11px system-ui, sans-serif"; c.textAlign = "right";
+    for (let v = 0; v <= yMax + 1e-9; v += ystep) {          // 가로 눈금(은은하게) + 값
+      c.strokeStyle = v === 0 ? COLORS.axis : COLORS.grid; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(L, Math.round(y(v)) + 0.5); c.lineTo(L + pw, Math.round(y(v)) + 0.5); c.stroke();
+      c.fillStyle = COLORS.muted; c.fillText(+v.toFixed(1), L - 6, y(v) + 4);
+    }
+    for (const m of lastMisses) {                            // 실수 시각 (속도가 떨어지는 지점과 비교하기 쉽게)
+      c.strokeStyle = COLORS.crit; c.globalAlpha = 0.8; c.lineWidth = 1; c.setLineDash(m.conf === "low" ? [3, 3] : []);
+      c.beginPath(); c.moveTo(Math.round(x(m.t)) + 0.5, T); c.lineTo(Math.round(x(m.t)) + 0.5, T + ph); c.stroke(); c.globalAlpha = 1; c.setLineDash([]);
+    }
+    if (pts.length > 1) {
+      c.beginPath(); c.moveTo(x(pts[0].t), y(0));
+      pts.forEach(p => c.lineTo(x(p.t), y(p.v)));
+      c.lineTo(x(pts[pts.length - 1].t), y(0)); c.closePath();
+      c.globalAlpha = 0.10; c.fillStyle = COLORS.speed; c.fill(); c.globalAlpha = 1;   // 면은 10% 농도
+      c.beginPath(); pts.forEach((p, i) => (i ? c.lineTo(x(p.t), y(p.v)) : c.moveTo(x(p.t), y(p.v))));
+      c.strokeStyle = COLORS.speed; c.lineWidth = 2; c.lineJoin = "round"; c.lineCap = "round"; c.stroke();
+      const last = pts[pts.length - 1];                      // 끝점 표시(표면색 링 포함)
+      c.fillStyle = COLORS.surface; c.beginPath(); c.arc(x(last.t), y(last.v), 6, 0, Math.PI * 2); c.fill();
+      c.fillStyle = COLORS.speed;   c.beginPath(); c.arc(x(last.t), y(last.v), 4, 0, Math.PI * 2); c.fill();
+    }
+    playhead(c, x(nowT), T, h, B);
+
+    if (speedHover !== null && pts[speedHover]) {            // 마우스를 올린 지점의 십자선 + 점
+      const p = pts[speedHover];
+      c.strokeStyle = COLORS.text2; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(Math.round(x(p.t)) + 0.5, T); c.lineTo(Math.round(x(p.t)) + 0.5, T + ph); c.stroke();
+      c.fillStyle = COLORS.surface; c.beginPath(); c.arc(x(p.t), y(p.v), 6, 0, Math.PI * 2); c.fill();
+      c.fillStyle = COLORS.speed;   c.beginPath(); c.arc(x(p.t), y(p.v), 4, 0, Math.PI * 2); c.fill();
+    }
+    speedCv._geo = { L, pw, dur, x, y };
+  }
+  const speedTip = $("speedTip");
+  speedCv.addEventListener("pointerdown", (ev) => { if (ev.pointerType !== "mouse") speedCv.dispatchEvent(new MouseEvent("mousemove", { clientX: ev.clientX, clientY: ev.clientY })); });   // 터치: 누른 곳의 값 보기
+  speedCv.addEventListener("mousemove", (ev) => {
+    const g = speedCv._geo; if (!g || !speedPts.length) return;
+    const r = speedCv.getBoundingClientRect(), mx = ev.clientX - r.left;
+    const t = ((mx - g.L) / g.pw) * g.dur;
+    let bi = 0, bd = Infinity;
+    speedPts.forEach((p, i) => { const d = Math.abs(p.t - t); if (d < bd) { bd = d; bi = i; } });
+    speedHover = bi; drawSpeed();
+    const p = speedPts[bi];
+    speedTip.textContent = `${p.t.toFixed(2)}초 · ${p.v.toFixed(1)} 스텝/초 (${Math.round(p.v * 60)}/분)`;
+    speedTip.style.display = "block";
+    speedTip.style.left = Math.min(Math.max(g.x(p.t) - 60, 0), r.width - speedTip.offsetWidth) + "px";
+    speedTip.style.top = Math.max(g.y(p.v) - 40, 0) + "px";
+  });
+  speedCv.addEventListener("mouseleave", () => { speedHover = null; speedTip.style.display = "none"; drawSpeed(); });
+  window.addEventListener("resize", () => { drawLane(); drawSpeed(); drawSync(); });
+  drawLane(); drawSpeed(); renderMetrics(analyzeRhythm([]));
+
+  // ═══════════ 저장 (CSV · PNG · 분석 영상) ═══════════
+  const baseName = () => currentName.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]/g, "_");
+  function download(blob, filename) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
+  csvBtn.addEventListener("click", () => {
+    const mi = getMissInfo(), a = rhythmOf(mi), c = JUMP_CONFIG;
+    const pct = (v) => v === null ? "" : Math.round(v * 100) + "%";
+    const summary = [
+      ["영상 파일", currentName],
+      ["영상 길이(초)", Number.isFinite(video.duration) ? video.duration.toFixed(2) : ""],
+      ["R 오른발 횟수", mi.R], ["L 왼발 횟수", mi.L], ["합계", mi.R + mi.L],
+      ["측정 시작(초)", mi.session.start === null ? "" : mi.session.start.toFixed(2)], ["측정 종료(초)", mi.session.end === null ? "" : mi.session.end.toFixed(2)],
+      ["보충한 스텝(추정)", mi.inferred.length], ["제외: 체공 시간 기준 미달", mi.skipped], ["제외: 줄이 안 돌고 있음", mi.exNorope], ["제외: 실수 구간", mi.exMiss],
+      ["제외: 측정 구간 밖", mi.exOut], ["제외: 중복 감지", mi.exDup],
+      ...mi.sections.map(x => [`${x.rel[0]}~${x.rel[1]}초 구간 R / L / 미스`, `${x.R} / ${x.L} / ${x.miss}`]),
+      ["평균 속도(스텝/초)", fmt(a.avgRate, 2) === "—" ? "" : fmt(a.avgRate, 2)],
+      ["평균 속도(스텝/분)", a.avgRate === null ? "" : Math.round(a.avgRate * 60)],
+      ["최고 속도(스텝/초, 3초 평균)", a.maxRate === null ? "" : fmt(a.maxRate, 2)],
+      ["교차 비율", pct(a.alternation)],
+      ["리듬 일정도(점)", a.score === null ? "" : Math.round(a.score)],
+      ["같은 발 주기(초)", a.cycleMean === null ? "" : fmt(a.cycleMean, 3)],
+      ["R→L 간격(초)", a.rl === null ? "" : fmt(a.rl, 3)], ["L→R 간격(초)", a.lr === null ? "" : fmt(a.lr, 3)],
+      ["좌우 균형", pct(a.balance)],
+      ["실수 횟수(합계)", mi.total], ["실수 횟수(자동 / 수동)", `${mi.auto} / ${mi.manual}`],
+      ["최대 연속 스텝", mi.best], ["평균 연속 스텝", mi.avg === null ? "" : fmt(mi.avg, 1)],
+      ["설정: 이륙 높이", c.LIFT_START_RATIO], ["설정: 착지 판정 낙폭", c.LAND_DROP_RATIO],
+      ["설정: 최소 체공(초)", c.MIN_AIRTIME_SEC], ["설정: 최대 체공(초)", c.MAX_AIRTIME_SEC], ["설정: 떨림 보정", c.SMOOTH_ALPHA],
+      ["설정: 실수 자동 감지", c.MISS_AUTO ? "켬" : "끔"], ["설정: 멈춤 판단 비율", c.MISS_STOP_RATIO], ["설정: 멈춤 최소 지속(초)", c.MISS_STOP_MIN_SEC], ["설정: 멈춘 뒤 다시 달려야 하는 시간(초)", c.MISS_RESUME_SEC],
+      ["설정: 측정 시간(초, 0=제한 없음)", c.MEASURE_SEC], ["설정: R·L 보정(보충·중복 제거)", c.STEP_INFER ? "켬" : "끔"],
+      ["설정: 줄 안 돌 때 카운트 제외", c.ROPE_GATE ? "켬" : "끔"], ["설정: 줄 돌림 판정 기준", c.ROPE_ON_RATIO],
+      ["설정: 손·팔 튐 감지", c.MISS_HAND_AUTO ? "켬" : "끔"], ["설정: 손·팔 튀는 정도(배)", c.MISS_HAND_RATIO], ["설정: 손·팔 튐 최소 지속(초)", c.MISS_HAND_MIN_SEC],
+    ];
+    const rp = getPerf(mi, true), o = rp ? rp.overall : null;
+    if (rp) summary.push(["경기력: 뛰는 동안 속도(스텝/초)", o.cycleRate === null ? "" : o.cycleRate.toFixed(2)], ["경기력: 후반 속도 유지율", pctTxt(o.fade)],
+      ["경기력: 손·발 박자 동기", pctTxt(o.syncPct)], ["경기력: 박자 변동", pctTxt(o.cv)], ...rp.tips.map((t, i) => [`훈련 포인트 ${i + 1}`, t.text]));
+    summary.push(["설정: 줄 리듬 끊김을 실수 근거로", c.MISS_ROPE_AUTO ? "켬" : "끔"], ["설정: 의심 실수도 개수에 포함", c.MISS_COUNT_LOW ? "켬" : "끔"]);
+    let j = -1;
+    const missRows = mi.listed.map((m, i) => {
+      if (m.counted) j++;
+      const d = rp ? rp.missDetails.find(x => x.m.key === m.key) : null;
+      return [i + 1, m.t.toFixed(3), confText(m) + (m.counted ? "" : "(개수 제외)"), missEvidence(m), m.counted ? mi.counts[j] : "",
+              d && d.recover !== null ? d.recover.toFixed(2) : "", d && d.lost !== null ? Math.round(d.lost) : "", d ? (d.flags.map(f => f.text).join(" / ") || "뚜렷한 차이 없음") : ""];
+    });
+    download(new Blob([buildCsv(allRows(mi), summary, missRows)], { type: "text/csv;charset=utf-8" }), `${baseName()}_분석.csv`);
+  });
+
+  pngBtn.addEventListener("click", () => {
+    const c = document.createElement("canvas");
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    const cx = c.getContext("2d");
+    cx.drawImage(video, 0, 0); cx.drawImage(canvas, 0, 0);   // 영상 한 장면 + 그 위의 스켈레톤·카운터
+    c.toBlob((b) => b && download(b, `${baseName()}_${(video.currentTime || 0).toFixed(1)}초.png`), "image/png");
+  });
+
+  // 분석 영상 녹화: 처음부터 1배속으로 재생하면서 '영상+그림'을 합친 캔버스를 MediaRecorder로 녹화
+  let exporting = null;
+  function pickMime() {
+    const list = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+    return typeof MediaRecorder === "undefined" ? null : list.find(m => MediaRecorder.isTypeSupported(m)) || null;
+  }
+  function compositeFrame() {
+    exporting.cctx.drawImage(video, 0, 0);
+    exporting.cctx.drawImage(canvas, 0, 0);
+    const pct = video.duration ? Math.round((video.currentTime / video.duration) * 100) : 0;
+    setStatus(`⏺ 분석 영상 녹화 중... ${pct}%`, "rec");
+  }
+  async function startExport() {
+    if (live || !video.src) return;
+    const mime = pickMime();
+    if (!mime) { $("exportMsg").textContent = "이 브라우저는 영상 녹화를 지원하지 않습니다. Chrome을 사용해 주세요."; return; }
+    const comp = document.createElement("canvas"); comp.width = video.videoWidth; comp.height = video.videoHeight;
+    const rec = new MediaRecorder(comp.captureStream(30), { mimeType: mime, videoBitsPerSecond: 6_000_000 });
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    exporting = { rec, chunks, mime, cctx: comp.getContext("2d"), cancelled: false };
+    exportBtn.textContent = "⏹ 녹화 취소";
+    $("exportMsg").textContent = "녹화 중에는 다른 조작을 하지 마세요.";
+
+    video.pause();
+    if (video.currentTime > 0) { video.currentTime = 0; await new Promise(r => video.addEventListener("seeked", r, { once: true })); }
+    if (!scanDone) { tracker.resetAll(); lastTime = -1; }     // 정밀 분석이 끝나 있으면 그 결과를 그대로 보여 주며 녹화 (녹화 때마다 값이 달라지지 않게)
+    video.playbackRate = 1;
+    rec.start();
+    await video.play();
+  }
+  function finishExport() {
+    const ex = exporting; exporting = null;
+    ex.rec.onstop = () => {
+      if (!ex.cancelled) {
+        const ext = ex.mime.includes("mp4") ? "mp4" : "webm";
+        download(new Blob(ex.chunks, { type: ex.mime }), `${baseName()}_분석.${ext}`);
+        $("exportMsg").textContent = `저장했습니다 (${ext}). 다운로드 폴더를 확인하세요.`;
+        setStatus(doneText(), "ready");
+      } else {
+        $("exportMsg").textContent = "녹화를 취소했습니다.";
+        setStatus("녹화를 취소했습니다.", "ready");
+      }
+      exportBtn.textContent = "🎬 분석 영상 저장 (스켈레톤 + 카운터)";
+    };
+    if (ex.rec.state !== "inactive") ex.rec.stop();
+  }
+  function cancelExport() {
+    if (!exporting) return;
+    exporting.cancelled = true; video.pause(); finishExport();
+  }
+  exportBtn.addEventListener("click", () => { exporting ? cancelExport() : startExport(); });
+</script>
+</body>
+</html>
