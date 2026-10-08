@@ -464,6 +464,10 @@
   // 줄에 걸리면 몸이 멈춥니다. 발끝이 가려져 스텝이 안 잡혀도 무릎·발목은 계속 움직이는 것이 보이므로,
   // 스텝 수가 아니라 '몸이 계속 위아래로 움직이는가'를 보면 달리는 중의 오탐이 줄어듭니다.
   //   활동량 = 무릎·발목의 세로 이동 속도 ÷ 몸통 길이 (몸통 길이/초), 0.3초 평균
+  // [느리게 뛰는 사람] 다리 활동량 기준(아래 STOP_RUN_MIN·STOP_RESUME_LEVEL·HAND_LEG_RUN·ROPE_LEG_MIN)은 빠른 스피드 스텝(초당 6~7스텝, 활동량 2~6)으로 맞춘 값이라
+  // 초당 3스텝 정도로 뛰면(활동량 0.9 안팎) '걷는 중'으로 오판합니다. 그래서 최근 JUMP_STEP_WIN초 안에 스텝이 JUMP_STEP_MIN개 이상 잡혔으면 활동량과 관계없이 '뛰는 중'으로 봅니다.
+  // (걷기는 스텝 간격이 0.4초 이상이라 1.2초 안에 3개가 잘 안 나옴 — 실제 영상 확인)
+  const JUMP_STEP_WIN = 1.2, JUMP_STEP_MIN = 3;
   const STOP_WIN_SEC = 0.3;     // 활동량을 평균내는 시간
   const STOP_RUN_MIN = 0.8;     // 이 활동량 이상으로 달리던 중이어야 '달리다 멈춤'을 봄 (준비 자세·걷기에서는 감지 안 함)
   const STOP_LEVEL_SEC = 3.0;   // '평소 움직임' = 직전 3초 활동량의 중앙값
@@ -480,7 +484,7 @@
     }
     function resetAll() { reset(); stops.length = 0; }
 
-    function push(t, v) {   // v: 지금 시각의 활동량(몸통 길이/초)
+    function push(t, v, steps = []) {   // v: 지금 시각의 활동량(몸통 길이/초) / steps: 최근 JUMP_STEP_WIN초 안의 스텝 착지 시각
       if (lastT !== null && t - lastT > 0.3) reset();
       lastT = t;
       if (low) {
@@ -496,8 +500,9 @@
       } else if (buf.length >= 5) {
         const level = median(buf.map(s => s.v));                    // 직전 3초의 평소 움직임
         const recent = buf.filter(s => s.t > t - STOP_READY_SEC);
-        const ready = recent.length >= 5 && median(recent.map(s => s.v)) >= STOP_RUN_MIN;   // 방금까지 달리고 있었나
-        if (ready && level >= STOP_RUN_MIN && v < cfg.MISS_STOP_RATIO * level) low = { t0: t, level, stop: null };
+        const jumping = steps.length >= JUMP_STEP_MIN;
+        const ready = recent.length >= 5 && (median(recent.map(s => s.v)) >= STOP_RUN_MIN || jumping);   // 방금까지 달리고 있었나 (활동량 또는 스텝으로)
+        if (ready && (level >= STOP_RUN_MIN || jumping) && v < cfg.MISS_STOP_RATIO * level) low = { t0: t, level, stop: null };
       }
       buf.push({ t, v });
       while (buf.length && buf[0].t < t - STOP_LEVEL_SEC) buf.shift();
@@ -506,8 +511,10 @@
       for (const s of stops) {
         if (s.resolved) continue;
         if (t - s.t > cfg.MISS_RESUME_SEC) { s.resolved = true; s.resumed = false; continue; }
-        const lvl = !low || low.stop !== s ? recentLevel(1.0) : null;      // 아직 멈춘 상태라면 달리는 중일 수 없음
-        if (lvl !== null && lvl >= STOP_RESUME_LEVEL) { s.resolved = true; s.resumed = true; s.resumeT = t; }
+        const stillLow = low && low.stop === s;                              // 아직 멈춘 상태라면 달리는 중일 수 없음
+        const lvl = !stillLow ? recentLevel(1.0) : null;
+        const stepsAfter = !stillLow ? steps.filter(x => x > s.t + s.dur).length : 0;   // 멈춘 뒤에 새로 잡힌 스텝
+        if ((lvl !== null && lvl >= STOP_RESUME_LEVEL) || stepsAfter >= JUMP_STEP_MIN) { s.resolved = true; s.resumed = true; s.resumeT = t; }
       }
     }
     // 최근 sec초 동안의 다리 활동 중앙값 (표본이 부족하면 null) → '지금 달리고 있는가' 판단에 씀
@@ -529,12 +536,12 @@
   const HAND_ONSET_LAG = 0.1;
   function createHandDetector(cfg) {
     const events = [];      // { t(튀기 시작한 시각), detectT, dur, peak(평소 대비 배수), ongoing, key }
-    let buf = [], cur = null, lastT = null;
+    let buf = [], cur = null, lastT = null, jumpSince = null;
     const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
-    function reset() { if (cur && cur.event) cur.event.ongoing = false; buf = []; cur = null; lastT = null; }
+    function reset() { if (cur && cur.event) cur.event.ongoing = false; buf = []; cur = null; lastT = null; jumpSince = null; }
     function resetAll() { reset(); events.length = 0; }
 
-    function push(t, v, legLevel) {   // v: 지금 손목 속도 / legLevel: 최근 1.5초 다리 활동 중앙값(또는 null)
+    function push(t, v, legLevel, jumping = false) {   // v: 지금 손목 속도 / legLevel: 최근 1.5초 다리 활동 중앙값(또는 null) / jumping: 최근 스텝으로 본 뛰는 중
       if (lastT !== null && t - lastT > 0.3) reset();
       lastT = t;
       if (cur) {
@@ -550,7 +557,10 @@
         return;                                                    // 튀는 동안의 값은 '평소' 기준에 넣지 않음
       }
       const base = buf.length >= 8 ? median(buf.map(s => s.v)) : null;
-      const running = legLevel !== null && legLevel !== undefined && legLevel >= HAND_LEG_RUN;
+      // 스텝으로만 '뛰는 중'인 경우(느리게 뛰기)는 그 상태가 '평소 손목 속도'를 재는 시간(3초)만큼 이어진 뒤부터 봄
+      // — 서 있다가 줄을 돌리기 시작하는 순간 손목이 빨라지는 것을 '튐'으로 오인하지 않게
+      jumpSince = jumping ? (jumpSince ?? t) : null;
+      const running = (jumping && t - jumpSince >= HAND_BASE_SEC) || (legLevel !== null && legLevel !== undefined && legLevel >= HAND_LEG_RUN);
       if (running && base !== null && base >= HAND_BASE_MIN && v >= cfg.MISS_HAND_RATIO * base) cur = { t0: t, base, peak: v / base, event: null };
       else { buf.push({ t, v }); while (buf.length && buf[0].t < t - HAND_BASE_SEC) buf.shift(); }
     }
@@ -611,7 +621,7 @@
       let why = win.some(s => s.brk) ? "brk" : win.filter(s => s.body).length < win.length * ROPE_BODY_FRAC ? "body" : "";
       let forced = why !== "";   // 추적 대상이 바뀜 / 몸이 안 보임 → 강제로 '정지'
       const legs = win.map(s => s.leg).filter(v => v !== null && v !== undefined).sort((a, b) => a - b);
-      if (legs.length >= win.length * 0.6 && legs[Math.floor(legs.length / 2)] < ROPE_LEG_MIN) { forced = true; why = "leg"; }   // 다리가 안 뛰고 있음(걷기·서 있기) → '정지'
+      if (legs.length >= win.length * 0.6 && legs[Math.floor(legs.length / 2)] < ROPE_LEG_MIN && win.filter(s => s.jump).length < win.length * 0.5) { forced = true; why = "leg"; }   // 다리가 안 뛰고 있음(걷기·서 있기) → '정지'
       let r = null;
       if (!forced) {
         const w = bandStats(win, "w"), e = bandStats(win, "e"), parts = [];
@@ -730,6 +740,9 @@
       }
       if (scale === null) return;
 
+      const recentSteps = [];                                                     // 최근 JUMP_STEP_WIN초 안의 스텝 착지 시각
+      for (let i = events.length - 1; i >= 0 && events[i].t > t - JUMP_STEP_WIN; i--) recentSteps.push(events[i].t);
+      const jumping = recentSteps.length >= JUMP_STEP_MIN;
       // 몸 전체의 활동량: 무릎·발목의 세로 이동 속도 ÷ 몸통 길이 → 0.3초 평균을 멈춤 감지기에 전달
       const mo = input.motionY;   // { kR, kL, aR, aL }: 무릎·발목 Y픽셀 (안 보이면 null)
       if (mo) {
@@ -743,7 +756,7 @@
           if (n) {
             speeds.push({ t, v: sum / n });
             while (speeds[0].t < t - STOP_WIN_SEC) speeds.shift();
-            if (speeds.length >= 3) { curLeg = speeds.reduce((s, x) => s + x.v, 0) / speeds.length; stopDet.push(t, curLeg); }
+            if (speeds.length >= 3) { curLeg = speeds.reduce((s, x) => s + x.v, 0) / speeds.length; stopDet.push(t, curLeg, recentSteps); }
           } else { speeds = []; curLeg = null; }
         } else { speeds = []; curLeg = null; }
         prevMotion = { t, y: mo };
@@ -759,7 +772,7 @@
       }
       prevHip = hip && rawT ? { t, p: hip, torso: rawT } : null;
       const ar = input.armRel, norm = (p) => p ? [p[0] / scale, p[1] / scale] : null;
-      rope.push(t, { w: ar ? norm(ar.w) : null, e: ar ? norm(ar.e) : null, body: !!input.bodyOk, brk, leg: curLeg });
+      rope.push(t, { w: ar ? norm(ar.w) : null, e: ar ? norm(ar.e) : null, body: !!input.bodyOk, brk, leg: curLeg, jump: jumping });
       if (ar && ar.w && !brk) armTrack.push({ t, w: norm(ar.w) });
 
       // 손목 속도: 두 손목의 이동 속도 ÷ 몸통 길이 → 0.25초 중앙값을 손 튐 감지기에 전달
@@ -777,7 +790,7 @@
             while (handSpeeds[0].t < t - HAND_WIN_SEC) handSpeeds.shift();
             if (handSpeeds.length >= 3) {   // 평균이 아니라 중앙값: 한두 프레임짜리 손목 인식 오류(순간 튐)에 흔들리지 않게
               const sv = handSpeeds.map(x => x.v).sort((a, b) => a - b);
-              handDet.push(t, sv[Math.floor(sv.length / 2)], stopDet.recentLevel(1.5));
+              handDet.push(t, sv[Math.floor(sv.length / 2)], stopDet.recentLevel(1.5), jumping);
             }
           } else handSpeeds = [];
         } else handSpeeds = [];
@@ -1106,6 +1119,8 @@
     const inSession = (t) => session.start === null || (t >= session.start - 0.5 && (session.end === null || t <= session.end));
     const listed = computeMisses(src.stops, src.handEvents, cfg, duration, src.marks, gaps)
       .filter(m => !m.auto || inSession(m.t))                                   // 측정 구간 밖의 자동 감지는 실수가 아님 (준비 동작·측정 종료 후)
+      // 실수 = 걸린 뒤 다시 줄을 돌리는 것. 그 뒤로 줄을 다시 돌리지 않았으면(연기를 끝내고 카메라 쪽으로 걸어오거나 휴대폰을 집는 동작) 자동 감지는 실수가 아님
+      .filter(m => !(m.auto && src.ropeKnown() && !ivs.some(r => r.b > m.t + 0.5)))
       .map(m => ({ ...m, counted: m.conf !== "low" || !!cfg.MISS_COUNT_LOW }));
     const misses = listed.filter(m => m.counted);                               // 개수·연속 스텝·구간 기록에 넣는 실수
     const all = classifyEvents(src.events, src.ropeOnAt, misses, cfg, session);
