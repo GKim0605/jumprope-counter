@@ -164,6 +164,8 @@
     .pmiss ul { margin: 4px 0 0; padding-left: 18px; }
     .pmiss .stats { font-size: 12px; color: var(--text-muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
     .perf-empty { font-size: 13px; color: var(--text-muted); }
+    pre.diag { white-space: pre-wrap; word-break: break-all; font-size: 12px; line-height: 1.5; background: var(--surface-2); color: var(--text-secondary); border-radius: 8px; padding: 10px 12px; margin: 8px 0; font-variant-numeric: tabular-nums; }
+    .diagmsg { font-size: 12px; color: var(--text-muted); }
     .tip {
       position: absolute; pointer-events: none; display: none; z-index: 2;
       background: #000; border: 1px solid var(--axis); border-radius: 8px; padding: 8px 12px;
@@ -315,7 +317,13 @@
           <button class="btn" id="pngBtn" disabled>🖼 현재 화면 PNG 저장</button>
           <button class="btn primary" id="exportBtn" disabled>🎬 분석 영상 저장 (스켈레톤 + 카운터)</button>
           <div id="exportMsg" aria-live="polite"></div>
+          <button class="btn" id="recSave" disabled title="카메라로 측정하는 동안 녹화한 원본 영상을 저장합니다">📥 카메라 녹화본 저장</button>
         </div>
+        <details id="diagBox">
+          <summary>진단 정보 (인식이 잘 안 될 때 복사해서 알려 주세요)</summary>
+          <pre id="diagText" class="diag"></pre>
+          <button class="btn small" id="diagCopy">📋 진단 정보 복사</button> <span id="diagMsg" class="diagmsg" aria-live="polite"></span>
+        </details>
         <p class="note">분석 영상은 처음부터 실시간(1배속)으로 재생하며 녹화합니다. 영상 길이만큼 걸리고, 브라우저가 지원하면 mp4, 아니면 webm으로 저장됩니다.</p>
       </section>
     </div>
@@ -1603,7 +1611,7 @@
     }
     if (exporting) cancelExport();
     if (live) stopLive(true);
-    scanNote = ""; liveDur = 0;
+    scanNote = ""; liveDur = 0; liveDiag = "";
     scanToken++; scanning = false; scanDone = false;     // 진행 중이던 정밀 분석은 중단
     tracker.resetAll(); lastTime = -1;
     if (currentUrl) URL.revokeObjectURL(currentUrl);
@@ -1615,6 +1623,52 @@
     refreshUI(true);
     startScan();
   }
+
+  // ═══════════ 진단 정보: 이 기기에서 실제로 몇 프레임을, 얼마나 잘 인식했는지 ═══════════
+  const diag = { mode: "-", frames: 0, pose: 0, feet: 0, dup: 0, off: 0, waitMiss: 0, startAt: 0, endAt: 0, t0: null, t1: null, videoFps: null, cam: null };
+  function diagReset(mode) { Object.assign(diag, { mode, frames: 0, pose: 0, feet: 0, dup: 0, off: 0, waitMiss: 0, startAt: performance.now(), endAt: 0, t0: null, t1: null, videoFps: null, cam: null }); }
+  function diagCount(t, pose) {
+    diag.frames++; diag.endAt = performance.now();
+    if (diag.t0 === null) diag.t0 = t;
+    diag.t1 = t;
+    if (pose) {
+      diag.pose++;
+      const v = JUMP_CONFIG.FOOT_MIN_VISIBILITY;
+      if ((pose[31].visibility ?? 1) >= v && (pose[32].visibility ?? 1) >= v) diag.feet++;
+    }
+  }
+  function diagText() {
+    const mi = getMissInfo(), pc = (a) => diag.frames ? Math.round(a / diag.frames * 100) + "%" : "—";
+    const span = diag.t0 !== null ? diag.t1 - diag.t0 : 0, wall = diag.endAt ? (diag.endAt - diag.startAt) / 1000 : 0;
+    const c = diag.cam;
+    return [
+      "기기: " + navigator.userAgent,
+      "화면: " + innerWidth + "×" + innerHeight + " · 배율 " + (window.devicePixelRatio || 1),
+      "분석 모델: " + modelKind + " (" + modelDelegate + ")" + (live ? " · 카메라 측정은 lite" : ""),
+      "방식: " + diag.mode,
+      c ? "카메라: " + (c.width || "?") + "×" + (c.height || "?") + " · " + (c.frameRate ? c.frameRate.toFixed(0) + "fps" : "fps ?") + " · " + (c.facingMode || "?") : null,
+      diag.videoFps ? "영상 프레임: 초당 " + diag.videoFps.toFixed(1) + "장" : null,
+      "영상 해상도: " + (video.videoWidth || "?") + "×" + (video.videoHeight || "?"),
+      "분석한 프레임: " + diag.frames + "장" + (span > 0 ? " (영상 1초당 " + (diag.frames / span).toFixed(1) + "장)" : "") + (wall > 0 ? " · 처리 속도 초당 " + (diag.frames / wall).toFixed(1) + "장" : ""),
+      "같은 장면 반복(건너뜀): " + diag.dup + "장 · 목표와 다른 프레임: " + diag.off + "장 · 프레임 확인 실패: " + diag.waitMiss + "장",
+      "사람 인식: " + pc(diag.pose) + " · 양 발끝 인식: " + pc(diag.feet),
+      "결과: R " + mi.R + " / L " + mi.L + " · 원본 스텝 " + mi.all.length + " · 보충 " + mi.inferred.length + " · 제외(체공 " + mi.skipped + ", 줄정지 " + mi.exNorope + ", 실수구간 " + mi.exMiss + ", 구간밖 " + mi.exOut + ", 중복 " + mi.exDup + ")",
+      "측정 구간: " + (mi.session.start === null ? "시작 안 됨" : mi.session.start.toFixed(1) + "~" + (mi.session.end === null ? "" : mi.session.end.toFixed(1)) + "초") + " · 실수 " + mi.total + " (확실 " + mi.high + " · 의심 " + mi.low + ")",
+      "줄 돌림 구간: " + (tracker.ropeIntervals().map(r => Math.max(0, r.a).toFixed(1) + "~" + (r.b === Infinity ? "끝" : r.b.toFixed(1))).join(", ") || "없음"),
+    ].filter(Boolean).join("\n") + (liveDiag && diag.mode !== "카메라 실시간" ? "\n\n[직전 카메라 측정]\n" + liveDiag : "");
+  }
+  $("diagBox").addEventListener("toggle", () => { if ($("diagBox").open) $("diagText").textContent = diagText(); });
+  $("diagCopy").addEventListener("click", () => {
+    const text = diagText(); $("diagText").textContent = text;
+    const fallback = () => { const r = document.createRange(); r.selectNodeContents($("diagText")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); $("diagMsg").textContent = "선택됐어요. 길게 눌러 복사해 주세요."; };
+    try { navigator.clipboard.writeText(text).then(() => { $("diagMsg").textContent = "복사했어요. 대화창에 붙여 넣어 주세요."; }, fallback); } catch (e) { fallback(); }
+  });
+  let lastRec = null, liveDiag = "";      // 마지막 카메라 측정의 원본 녹화본 { blob, mime } / 그 측정의 진단 정보
+  $("recSave").addEventListener("click", () => {
+    if (!lastRec) return;
+    const ext = lastRec.mime.includes("mp4") ? "mp4" : "webm";
+    download(lastRec.blob, `${baseName()}.${ext}`);
+  });
 
   // ═══════════ 휴대폰 편의: 화면 꺼짐 방지 · 크게 보기 ═══════════
   let wakeLock = null;
@@ -1690,6 +1744,13 @@
       const frameDur = await probeFrameDur();
       if (token !== scanToken) return;
       const step = frameDur;      // 모든 프레임을 분석 (60fps 영상에서 한 장씩 건너뛰면 카운트가 1~2개 줄어듦)
+      diagReset("정밀 분석"); diag.videoFps = 1 / frameDur;
+      // Safari 등은 '이동 완료' 신호 시점에 새 장면이 아직 안 그려졌을 수 있어서, 그 프레임이 실제로 화면에 나온 것(requestVideoFrameCallback)을 확인한 뒤 분석
+      let useFrameCb = typeof video.requestVideoFrameCallback === "function", cbMiss = 0, lastMT = null;
+      const waitFrame = (ms) => !useFrameCb ? Promise.resolve(null) : new Promise((res) => {
+        const tm = setTimeout(() => res(null), ms);
+        video.requestVideoFrameCallback((now, meta) => { clearTimeout(tm); res(meta); });
+      });
       const dur = video.duration;
       const total = Math.max(1, Math.floor((dur - frameDur / 2) / step));
       const t0 = performance.now();
@@ -1704,9 +1765,19 @@
           if (token !== scanToken) return;
         }
         const t = i * step;
+        const shown = waitFrame(600);
         video.currentTime = t + frameDur / 2;      // 그 프레임의 한가운데로 이동 (경계에 걸려 이웃 프레임이 잡히는 것을 방지)
         await nextEvent(video, "seeked", 3000);
+        const meta = await shown;
         if (token !== scanToken) return;
+        if (meta) {
+          if (lastMT !== null && Math.abs(meta.mediaTime - lastMT) < 1e-4) { diag.dup++; continue; }   // 같은 장면이 또 나옴 → 두 번 분석하면 움직임이 작게 잡히므로 건너뜀
+          lastMT = meta.mediaTime;
+          if (Math.abs(meta.mediaTime - t) > frameDur * 1.5) diag.off++;
+        } else if (useFrameCb) {
+          cbMiss++; diag.waitMiss++;
+          if (cbMiss >= 5 && cbMiss === i + 1) useFrameCb = false;     // 이 브라우저는 멈춘 상태에서 프레임 신호를 주지 않음 → 기다리지 않음
+        }
         analyzeFrame(t);
         if (i % 4 === 0) {
           const pct = Math.round((i + 1) / total * 100), el = (performance.now() - t0 - pausedMs) / 1000;
@@ -1787,6 +1858,8 @@
         try { rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 }); rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); }; rec.start(1000); } catch (e) { rec = null; }
       }
       live = { stream, rec, chunks, mime, t0: null, t: 0, n: 0, lastSec: -1, lastAt: performance.now(), delay: parseInt($("liveDelay").value, 10) || 0 };
+      diagReset("카메라 실시간");
+      try { const tk = stream.getVideoTracks()[0]; diag.cam = tk && tk.getSettings ? tk.getSettings() : null; } catch (e) { diag.cam = null; }
       live.timer = setInterval(() => {
         if (!live) return;
         const gap = (performance.now() - live.lastAt) / 1000;
@@ -1813,6 +1886,7 @@
     const L = live; live = null; liveDur = L.t; clearInterval(L.timer);
     liveBtn.disabled = true;
     if (L.rec && L.rec.state !== "inactive") await new Promise((res) => { L.rec.onstop = res; L.rec.stop(); });
+    liveDiag = diagText();                        // 카메라를 끄기 전에(해상도 포함) 카메라 측정의 진단을 보관
     L.stream.getTracks().forEach(tk => tk.stop());
     video.pause(); video.srcObject = null;
     liveBtn.textContent = "📷 카메라로 실시간 측정"; liveBtn.classList.remove("danger"); liveBtn.disabled = false;
@@ -1822,10 +1896,12 @@
     video.controls = true; exportBtn.disabled = false; redoBtn.disabled = false;
     const liveText = doneText();
     refreshUI(true);
+    if (L.chunks.length) { lastRec = { blob: new Blob(L.chunks, { type: L.mime }), mime: L.mime }; $("recSave").disabled = false; }
     if (skipScan || !L.chunks.length) { setStatus(liveText + " (카메라 실시간 측정)", "ready"); return; }
     const v = getMissInfo();
     scanNote = `실시간 측정값은 R ${v.R} / L ${v.L}`;
-    const url = URL.createObjectURL(new Blob(L.chunks, { type: L.mime }));
+    lastRec = { blob: new Blob(L.chunks, { type: L.mime }), mime: L.mime }; $("recSave").disabled = false;
+    const url = URL.createObjectURL(lastRec.blob);
     if (currentUrl) URL.revokeObjectURL(currentUrl);
     currentUrl = url; video.src = url;
     setStatus("⏳ 녹화본을 한 프레임씩 다시 분석합니다 (정밀 분석)...", "ready");
@@ -1884,6 +1960,7 @@
   function analyzeFrame(t) {
     const result = poseLandmarker.detectForVideo(video, mpTimestamp(t));
     const pose = result.landmarks[0];   // 첫 번째 사람의 33개 점 (없으면 undefined)
+    if (scanning || live) diagCount(t, pose);
     if (live) live.t = t;
     if (!(live && t < live.delay)) tracker.update(t, extractTrackerInput(pose));     // 카메라 '시작 전 대기' 중에는 화면에 보이기만 하고 세지 않음
     const rp = tracker.getState().replaying;   // 이미 분석한 구간을 다시 보는 중이면 안내만 하고 세지 않음
